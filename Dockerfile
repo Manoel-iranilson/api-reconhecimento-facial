@@ -42,8 +42,7 @@ EXPOSE 8000
 
 # Configurar limites de memória para o container
 ENV UVICORN_WORKERS=1 \
-    UVICORN_LIMIT_CONCURRENCY=1 \
-    UVICORN_TIMEOUT=600
+    UVICORN_LIMIT_CONCURRENCY=1
 
-# Comando para iniciar a aplicação com workers otimizados e timeout aumentado
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "1", "--timeout-keep-alive", "60", "--timeout", "600"]
+# Comando para iniciar a aplicação com workers otimizados
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "1", "--timeout-keep-alive", "120"]

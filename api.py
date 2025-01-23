@@ -247,15 +247,16 @@ async def reconhecer_frame(file: UploadFile = File(...)):
             logger.error("Imagem inválida recebida")
             raise HTTPException(status_code=400, detail="Imagem inválida")
 
-        # Reduzir tamanho para processamento mais rápido
+        # Reduzir tamanho da imagem para processamento mais rápido
         height, width = frame.shape[:2]
-        max_size = 800
+        max_size = 400
         if height > max_size or width > max_size:
             scale = max_size / max(height, width)
             frame = cv2.resize(frame, None, fx=scale, fy=scale)
 
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
+        # Usar model="hog" que é mais rápido e usa menos memória
         face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
         logger.info(f"Encontrados {len(face_locations)} rostos na imagem")
 
@@ -263,10 +264,12 @@ async def reconhecer_frame(file: UploadFile = File(...)):
             logger.info("Nenhum rosto encontrado na imagem")
             return {"nome": None, "id": None}
 
+        # Reduzir o número de jitters para 1 para processamento mais rápido
         face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
         logger.info(f"Gerados {len(face_encodings)} encodings")
 
         for face_encoding in face_encodings:
+            # Aumentar a tolerância para 0.6 para melhor performance
             matches = face_recognition.compare_faces(rostos_cache["encodings"], face_encoding, tolerance=0.6)
             logger.info(f"Resultados da comparação: {matches}")
 
