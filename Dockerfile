@@ -27,7 +27,6 @@ RUN pip install --no-cache-dir dlib==19.24.1 \
 
 # Copiar apenas os arquivos necessários
 COPY api.py .
-COPY .env .
 
 # Expor a porta que a aplicação vai usar
 EXPOSE 8000
