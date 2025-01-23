@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir dlib==19.24.1 \
     && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir gunicorn \
     && rm -rf ~/.cache/pip/*
 
 # Copiar apenas os arquivos necessários
@@ -41,8 +42,11 @@ COPY api.py .
 EXPOSE 8000
 
 # Configurar limites de memória para o container
-ENV UVICORN_WORKERS=1 \
-    UVICORN_LIMIT_CONCURRENCY=1
+ENV WORKERS=1 \
+    TIMEOUT=300 \
+    KEEP_ALIVE=120 \
+    MAX_REQUESTS=100 \
+    MAX_REQUESTS_JITTER=10
 
-# Comando para iniciar a aplicação com workers otimizados
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "1", "--timeout-keep-alive", "120"]
+# Comando para iniciar a aplicação com Gunicorn
+CMD ["gunicorn", "api:app", "--bind", "0.0.0.0:8000", "--worker-class", "uvicorn.workers.UvicornWorker", "--workers", "1", "--timeout", "300", "--keep-alive", "120", "--max-requests", "100", "--max-requests-jitter", "10", "--log-level", "info"]

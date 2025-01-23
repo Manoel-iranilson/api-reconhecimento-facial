@@ -11,6 +11,9 @@ import logging
 import gc
 import sys
 from typing import Dict, List, Optional
+from starlette.responses import JSONResponse
+from fastapi.responses import Response
+import time
 
 # Configurar logging mais detalhado
 logging.basicConfig(
@@ -123,7 +126,7 @@ async def lifespan(app: FastAPI):
                 
                 # Reduzir tamanho da imagem
                 height, width = img.shape[:2]
-                max_size = 800
+                max_size = 400
                 if height > max_size or width > max_size:
                     scale = max_size / max(height, width)
                     img = cv2.resize(img, None, fx=scale, fy=scale)
@@ -155,6 +158,7 @@ async def lifespan(app: FastAPI):
                 
             except Exception as e:
                 logger.error(f"Erro ao processar {nome}: {str(e)}")
+                continue
         
         logger.info("=== Resumo do carregamento ===")
         logger.info(f"Total de rostos no cache: {len(rostos_cache['encodings'])}")
@@ -172,22 +176,31 @@ async def lifespan(app: FastAPI):
     rostos_cache["ids"] = []
     gc.collect()
 
-# Criar a aplicação FastAPI
+# Criar a aplicação FastAPI com configurações otimizadas
 app = FastAPI(
     title="API de Reconhecimento Facial",
     description="API para reconhecimento facial usando FastAPI e face_recognition",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    openapi_url=None,  
+    docs_url=None,     
+    redoc_url=None     
 )
 
-# Configurações CORS
+# Configurações CORS mais restritas para melhor performance
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+@app.get("/ping")
+async def ping():
+    """
+    Endpoint simples para testar se a API está respondendo
+    """
+    return JSONResponse({"status": "pong", "timestamp": time.time()})
 
 @app.get("/")
 async def root():
@@ -196,11 +209,12 @@ async def root():
     """
     try:
         memory_info = gc.get_stats()
-        return {
+        return JSONResponse({
             "status": "online",
             "total_rostos": len(rostos_cache["encodings"]),
-            "memory_info": memory_info
-        }
+            "memory_info": memory_info,
+            "timestamp": time.time()
+        })
     except Exception as e:
         logger.error(f"Erro na rota root: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -211,10 +225,11 @@ async def status_cache():
     Retorna o status atual do cache
     """
     try:
-        return {
+        return JSONResponse({
             "total_rostos": len(rostos_cache["encodings"]),
-            "nomes_carregados": rostos_cache["nomes"]
-        }
+            "nomes_carregados": rostos_cache["nomes"],
+            "timestamp": time.time()
+        })
     except Exception as e:
         logger.error(f"Erro ao verificar status do cache: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -225,6 +240,7 @@ async def reconhecer_frame(file: UploadFile = File(...)):
     Recebe um arquivo de imagem e retorna o nome e id da pessoa reconhecida
     """
     try:
+        start_time = time.time()
         logger.info("Iniciando reconhecimento de face...")
         logger.info(f"Cache atual contém {len(rostos_cache['encodings'])} rostos")
         
@@ -262,7 +278,7 @@ async def reconhecer_frame(file: UploadFile = File(...)):
 
         if not face_locations:
             logger.info("Nenhum rosto encontrado na imagem")
-            return {"nome": None, "id": None}
+            return JSONResponse({"nome": None, "id": None, "tempo_processamento": time.time() - start_time})
 
         # Reduzir o número de jitters para 1 para processamento mais rápido
         face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
@@ -278,10 +294,18 @@ async def reconhecer_frame(file: UploadFile = File(...)):
                 nome = rostos_cache["nomes"][first_match_index]
                 id_pessoa = rostos_cache["ids"][first_match_index]
                 logger.info(f"Match encontrado: {nome} (ID: {id_pessoa})")
-                return {"nome": nome, "id": id_pessoa}
+                return JSONResponse({
+                    "nome": nome, 
+                    "id": id_pessoa,
+                    "tempo_processamento": time.time() - start_time
+                })
 
         logger.info("Nenhum rosto reconhecido")
-        return {"nome": "Desconhecido", "id": None}
+        return JSONResponse({
+            "nome": "Desconhecido", 
+            "id": None,
+            "tempo_processamento": time.time() - start_time
+        })
 
     except Exception as e:
         logger.error(f"Erro durante o reconhecimento: {str(e)}")
