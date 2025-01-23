@@ -12,11 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
     OPENCV_OPENCL_RUNTIME="" \
     OPENCV_OPENCL_DEVICE="" \
     # Otimizações face_recognition
-    FACE_RECOGNITION_MODEL="hog" \
-    # Configurações do Railway
-    WEB_CONCURRENCY=1 \
-    MAX_WORKERS=1 \
-    WORKER_CLASS="uvicorn.workers.UvicornWorker"
+    FACE_RECOGNITION_MODEL="hog"
 
 WORKDIR /app
 
@@ -32,11 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-# Instalar dlib primeiro
+# Instalar dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir dlib==19.24.1 \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir gunicorn \
     && rm -rf ~/.cache/pip/*
 
 # Copiar apenas os arquivos necessários
@@ -45,18 +40,5 @@ COPY api.py .
 # Expor a porta que a aplicação vai usar
 EXPOSE 8000
 
-# Configurar variáveis de ambiente para a porta
-ENV PORT=8000
-
-# Comando para iniciar com Gunicorn e configurações otimizadas
-CMD gunicorn api:app \
-    --bind 0.0.0.0:$PORT \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --workers 1 \
-    --threads 8 \
-    --timeout 300 \
-    --keep-alive 120 \
-    --log-level info \
-    --max-requests 1000 \
-    --max-requests-jitter 50 \
-    --backlog 2048
+# Comando para iniciar a aplicação
+CMD uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1 --limit-max-requests 1000 --timeout-keep-alive 75
