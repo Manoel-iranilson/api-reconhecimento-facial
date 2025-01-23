@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: api-reconhecimento-facial
+    env: docker
+    plan: free
+    region: oregon
