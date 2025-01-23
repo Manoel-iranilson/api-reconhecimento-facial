@@ -11,6 +11,7 @@ from PIL import Image
 import base64
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
+from fastapi.middleware.cors import CORSMiddleware
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -118,12 +119,22 @@ app = FastAPI(lifespan=lifespan)
 # Verificar variáveis de ambiente
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
+port = int(os.getenv("PORT", "8000"))
 
 if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos no arquivo .env")
 
 # Inicializar cliente Supabase
 supabase = create_client(supabase_url, supabase_key)
+
+# Configurações CORS para produção
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Ajuste isso para seus domínios permitidos em produção
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Cache global para rostos conhecidos
 rostos_cache = {
