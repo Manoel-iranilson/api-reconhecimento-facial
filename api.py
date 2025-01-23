@@ -104,29 +104,29 @@ async def reconhecer_frame(request: ImagemRequest):
             raise HTTPException(status_code=400, detail="Frame inválido")
         
         # Reduzir o tamanho do frame para processamento mais rápido
-        small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)  # Ajustado para 0.5
+        small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)  
         rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
         
         # Encontrar rostos no frame
-        face_locations = face_recognition.face_locations(rgb_small_frame, model="hog")
-        print(f"Rostos encontrados: {len(face_locations)}")  # Log de rostos encontrados
+        face_locations = face_recognition.face_locations(rgb_small_frame, model="cnn")
+        print(f"Rostos encontrados: {len(face_locations)}")  
         
         # Se não encontrou nenhum rosto, retorna None
         if not face_locations:
             return {"nome": None, "id": None}
             
         face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
-        print(f"Encodings gerados: {len(face_encodings)}")  # Log de encodings gerados
+        print(f"Encodings gerados: {len(face_encodings)}")  
         
         # Para cada rosto encontrado
         for face_encoding in face_encodings:
             # Verificar matches
-            matches = face_recognition.compare_faces(rostos_conhecidos, face_encoding, tolerance=0.4)  # Ajustado para 0.4
+            matches = face_recognition.compare_faces(rostos_conhecidos, face_encoding, tolerance=0.5)  
             
             if True in matches:
                 first_match_index = matches.index(True)
                 nome = nomes_conhecidos[first_match_index]
-                id_pessoa = ids_conhecidos[first_match_index]  # Pegar o ID correspondente
+                id_pessoa = ids_conhecidos[first_match_index]  
                 return {"nome": nome, "id": id_pessoa}
         
         # Se nenhum rosto foi reconhecido
