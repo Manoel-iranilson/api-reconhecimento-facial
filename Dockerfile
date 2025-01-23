@@ -12,7 +12,11 @@ ENV PYTHONUNBUFFERED=1 \
     OPENCV_OPENCL_RUNTIME="" \
     OPENCV_OPENCL_DEVICE="" \
     # Otimizações face_recognition
-    FACE_RECOGNITION_MODEL="hog"
+    FACE_RECOGNITION_MODEL="hog" \
+    # Configurações do Railway
+    WEB_CONCURRENCY=1 \
+    MAX_WORKERS=1 \
+    WORKER_CLASS="uvicorn.workers.UvicornWorker"
 
 WORKDIR /app
 
@@ -41,12 +45,18 @@ COPY api.py .
 # Expor a porta que a aplicação vai usar
 EXPOSE 8000
 
-# Configurar limites de memória para o container
-ENV WORKERS=1 \
-    TIMEOUT=300 \
-    KEEP_ALIVE=120 \
-    MAX_REQUESTS=100 \
-    MAX_REQUESTS_JITTER=10
+# Configurar variáveis de ambiente para a porta
+ENV PORT=8000
 
-# Comando para iniciar a aplicação com Gunicorn
-CMD ["gunicorn", "api:app", "--bind", "0.0.0.0:8000", "--worker-class", "uvicorn.workers.UvicornWorker", "--workers", "1", "--timeout", "300", "--keep-alive", "120", "--max-requests", "100", "--max-requests-jitter", "10", "--log-level", "info"]
+# Comando para iniciar com Gunicorn e configurações otimizadas
+CMD gunicorn api:app \
+    --bind 0.0.0.0:$PORT \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers 1 \
+    --threads 8 \
+    --timeout 300 \
+    --keep-alive 120 \
+    --log-level info \
+    --max-requests 1000 \
+    --max-requests-jitter 50 \
+    --backlog 2048

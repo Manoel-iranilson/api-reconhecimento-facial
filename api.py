@@ -12,7 +12,6 @@ import gc
 import sys
 from typing import Dict, List, Optional
 from starlette.responses import JSONResponse
-from fastapi.responses import Response
 import time
 
 # Configurar logging mais detalhado
@@ -29,11 +28,6 @@ load_dotenv()
 # Verificar variáveis de ambiente
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
-port = int(os.getenv("PORT", "8000"))
-
-logger.info(f"Iniciando aplicação na porta {port}")
-logger.info(f"Supabase URL configurada: {'Sim' if supabase_url else 'Não'}")
-logger.info(f"Supabase Key configurada: {'Sim' if supabase_key else 'Não'}")
 
 if not supabase_url or not supabase_key:
     logger.error("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
@@ -84,9 +78,9 @@ async def lifespan(app: FastAPI):
             return
         
         # Limpar cache e coletar lixo
-        rostos_cache["encodings"] = []
-        rostos_cache["nomes"] = []
-        rostos_cache["ids"] = []
+        rostos_cache["encodings"].clear()
+        rostos_cache["nomes"].clear()
+        rostos_cache["ids"].clear()
         gc.collect()
         
         logger.info("Buscando dados do Supabase...")
@@ -126,7 +120,7 @@ async def lifespan(app: FastAPI):
                 
                 # Reduzir tamanho da imagem
                 height, width = img.shape[:2]
-                max_size = 400
+                max_size = 200  # Reduzido ainda mais para melhor performance
                 if height > max_size or width > max_size:
                     scale = max_size / max(height, width)
                     img = cv2.resize(img, None, fx=scale, fy=scale)
@@ -171,23 +165,15 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Limpando recursos...")
-    rostos_cache["encodings"] = []
-    rostos_cache["nomes"] = []
-    rostos_cache["ids"] = []
+    rostos_cache["encodings"].clear()
+    rostos_cache["nomes"].clear()
+    rostos_cache["ids"].clear()
     gc.collect()
 
-# Criar a aplicação FastAPI com configurações otimizadas
-app = FastAPI(
-    title="API de Reconhecimento Facial",
-    description="API para reconhecimento facial usando FastAPI e face_recognition",
-    version="1.0.0",
-    lifespan=lifespan,
-    openapi_url=None,  
-    docs_url=None,     
-    redoc_url=None     
-)
+# Criar a aplicação FastAPI
+app = FastAPI(lifespan=lifespan)
 
-# Configurações CORS mais restritas para melhor performance
+# Configurações CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -208,11 +194,9 @@ async def root():
     Rota de teste e status da API
     """
     try:
-        memory_info = gc.get_stats()
         return JSONResponse({
             "status": "online",
             "total_rostos": len(rostos_cache["encodings"]),
-            "memory_info": memory_info,
             "timestamp": time.time()
         })
     except Exception as e:
@@ -242,71 +226,97 @@ async def reconhecer_frame(file: UploadFile = File(...)):
     try:
         start_time = time.time()
         logger.info("Iniciando reconhecimento de face...")
-        logger.info(f"Cache atual contém {len(rostos_cache['encodings'])} rostos")
         
+        # Verificar cache
         if len(rostos_cache["encodings"]) == 0:
-            logger.error("Cache vazio. Verifique a conexão com o Supabase")
-            raise HTTPException(
-                status_code=503,
-                detail="Sistema não está pronto. Cache de rostos vazio."
-            )
+            logger.error("Cache vazio")
+            return JSONResponse({
+                "status": "error",
+                "message": "Sistema não está pronto. Cache vazio.",
+                "tempo_processamento": time.time() - start_time
+            }, status_code=503)
         
+        # Ler imagem
         contents = await file.read()
         if not contents:
-            logger.error("Arquivo vazio recebido")
-            raise HTTPException(status_code=400, detail="Arquivo vazio")
-            
-        np_array = np.frombuffer(contents, dtype=np.uint8)
-        frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
-
-        if frame is None:
-            logger.error("Imagem inválida recebida")
-            raise HTTPException(status_code=400, detail="Imagem inválida")
-
-        # Reduzir tamanho da imagem para processamento mais rápido
-        height, width = frame.shape[:2]
-        max_size = 400
-        if height > max_size or width > max_size:
-            scale = max_size / max(height, width)
-            frame = cv2.resize(frame, None, fx=scale, fy=scale)
-
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            logger.error("Arquivo vazio")
+            return JSONResponse({
+                "status": "error",
+                "message": "Arquivo vazio",
+                "tempo_processamento": time.time() - start_time
+            }, status_code=400)
         
-        # Usar model="hog" que é mais rápido e usa menos memória
-        face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
-        logger.info(f"Encontrados {len(face_locations)} rostos na imagem")
-
-        if not face_locations:
-            logger.info("Nenhum rosto encontrado na imagem")
-            return JSONResponse({"nome": None, "id": None, "tempo_processamento": time.time() - start_time})
-
-        # Reduzir o número de jitters para 1 para processamento mais rápido
-        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
-        logger.info(f"Gerados {len(face_encodings)} encodings")
-
-        for face_encoding in face_encodings:
-            # Aumentar a tolerância para 0.6 para melhor performance
-            matches = face_recognition.compare_faces(rostos_cache["encodings"], face_encoding, tolerance=0.6)
-            logger.info(f"Resultados da comparação: {matches}")
-
-            if True in matches:
-                first_match_index = matches.index(True)
-                nome = rostos_cache["nomes"][first_match_index]
-                id_pessoa = rostos_cache["ids"][first_match_index]
-                logger.info(f"Match encontrado: {nome} (ID: {id_pessoa})")
+        # Processar imagem
+        try:    
+            np_array = np.frombuffer(contents, dtype=np.uint8)
+            frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                raise ValueError("Imagem inválida")
+            
+            # Converter para RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Detectar faces
+            face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
+            if not face_locations:
                 return JSONResponse({
-                    "nome": nome, 
-                    "id": id_pessoa,
+                    "status": "not_found",
+                    "message": "Nenhum rosto encontrado na imagem",
                     "tempo_processamento": time.time() - start_time
                 })
-
-        logger.info("Nenhum rosto reconhecido")
-        return JSONResponse({
-            "nome": "Desconhecido", 
-            "id": None,
-            "tempo_processamento": time.time() - start_time
-        })
-
+            
+            # Gerar encodings
+            face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
+            if not face_encodings:
+                return JSONResponse({
+                    "status": "error",
+                    "message": "Não foi possível processar o rosto na imagem",
+                    "tempo_processamento": time.time() - start_time
+                }, status_code=400)
+            
+            # Comparar com rostos conhecidos
+            for face_encoding in face_encodings:
+                matches = face_recognition.compare_faces(rostos_cache["encodings"], face_encoding, tolerance=0.6)
+                
+                if True in matches:
+                    first_match_index = matches.index(True)
+                    nome = rostos_cache["nomes"][first_match_index]
+                    id_pessoa = rostos_cache["ids"][first_match_index]
+                    
+                    return JSONResponse({
+                        "status": "success",
+                        "nome": nome,
+                        "id": id_pessoa,
+                        "tempo_processamento": time.time() - start_time
+                    })
+            
+            # Nenhum match encontrado
+            return JSONResponse({
+                "status": "not_recognized",
+                "message": "Rosto não reconhecido",
+                "tempo_processamento": time.time() - start_time
+            })
+            
+        except Exception as e:
+            logger.error(f"Erro no processamento da imagem: {str(e)}")
+            return JSONResponse({
+                "status": "error",
+                "message": f"Erro no processamento da imagem: {str(e)}",
+                "tempo_processamento": time.time() - start_time
+            }, status_code=500)
+        finally:
+            # Limpar memória
+            if 'frame' in locals():
+                del frame
+            if 'rgb_frame' in locals():
+                del rgb_frame
+            gc.collect()
+            
     except Exception as e:
         logger.error(f"Erro durante o reconhecimento: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse({
+            "status": "error",
+            "message": str(e),
+            "tempo_processamento": time.time() - start_time
+        }, status_code=500)
