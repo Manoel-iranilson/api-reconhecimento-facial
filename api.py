@@ -112,20 +112,13 @@ async def lifespan(app: FastAPI):
     """Gerenciador do ciclo de vida da aplicação"""
     try:
         logger.info("Iniciando aplicação")
-        
         # Inicializar Supabase
         global supabase
         supabase = create_client(supabase_url, supabase_key)
-        
-        # Carregar cache
-        await carregar_cache()
-        
     except Exception as e:
         logger.error(f"Erro na inicialização: {str(e)}")
         raise
-    
     yield
-    
     # Limpar recursos
     rostos_cache["encodings"].clear()
     rostos_cache["nomes"].clear()
@@ -159,6 +152,112 @@ async def status():
         "total_rostos": len(rostos_cache["encodings"]),
         "nomes": rostos_cache["nomes"]
     })
+
+@app.post("/carregar-cache")
+async def carregar_cache_endpoint():
+    """Endpoint para carregar o cache de rostos"""
+    try:
+        start_time = time.time()
+        
+        # Limpar cache existente
+        rostos_cache["encodings"].clear()
+        rostos_cache["nomes"].clear()
+        rostos_cache["ids"].clear()
+        gc.collect()
+
+        # Buscar dados do Supabase
+        response = supabase.table('colaborador').select("id, nome, url_foto").execute()
+        if not response.data:
+            return JSONResponse({
+                "status": "warning",
+                "message": "Nenhum registro encontrado",
+                "total_processado": 0,
+                "tempo": time.time() - start_time
+            })
+
+        total_processado = 0
+        total_registros = len(response.data)
+
+        for registro in response.data:
+            try:
+                foto_url = registro.get('url_foto')
+                nome = registro.get('nome')
+                id_pessoa = registro.get('id')
+
+                if not foto_url:
+                    continue
+
+                # Baixar e processar imagem
+                img_response = requests.get(foto_url, timeout=30)
+                if img_response.status_code != 200:
+                    continue
+
+                # Converter imagem
+                img_array = np.frombuffer(img_response.content, dtype=np.uint8)
+                img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+
+                # Processar face
+                rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_img, model="hog")
+                if not face_locations:
+                    continue
+
+                encodings = face_recognition.face_encodings(rgb_img, face_locations)
+                if not encodings:
+                    continue
+
+                # Adicionar ao cache
+                rostos_cache["encodings"].append(encodings[0])
+                rostos_cache["nomes"].append(nome)
+                rostos_cache["ids"].append(id_pessoa)
+                total_processado += 1
+
+                # Limpar memória
+                del img_array
+                del img
+                del rgb_img
+                gc.collect()
+
+            except Exception as e:
+                logger.error(f"Erro ao processar {nome}: {str(e)}")
+                continue
+
+        tempo_total = time.time() - start_time
+        return JSONResponse({
+            "status": "success",
+            "message": "Cache carregado com sucesso",
+            "total_registros": total_registros,
+            "total_processado": total_processado,
+            "tempo": tempo_total
+        })
+
+    except Exception as e:
+        logger.error(f"Erro ao carregar cache: {str(e)}")
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
+
+@app.get("/limpar-cache")
+async def limpar_cache():
+    """Endpoint para limpar o cache"""
+    try:
+        rostos_cache["encodings"].clear()
+        rostos_cache["nomes"].clear()
+        rostos_cache["ids"].clear()
+        gc.collect()
+        
+        return JSONResponse({
+            "status": "success",
+            "message": "Cache limpo com sucesso"
+        })
+    except Exception as e:
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
 
 @app.post("/reconhecer")
 async def reconhecer_frame(file: UploadFile = File(...)):
