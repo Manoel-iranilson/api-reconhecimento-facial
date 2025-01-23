@@ -4,7 +4,6 @@ WORKDIR /code
 
 COPY ./requirements.txt /code/requirements.txt
 COPY ./api.py /code/api.py
-COPY ./.env /code/.env
 
 RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 
