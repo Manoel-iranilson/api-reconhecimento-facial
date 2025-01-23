@@ -1,26 +1,60 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
-from supabase import create_client
-import cv2
-import face_recognition
-import numpy as np
 import os
-from dotenv import load_dotenv
+import cv2
+import numpy as np
+import face_recognition
 import requests
-from io import BytesIO
-from PIL import Image
-import base64
-from pydantic import BaseModel
-from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+from supabase import create_client
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import gc
+import sys
+from typing import Dict, List, Optional
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
+# Configurar logging mais detalhado
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
 logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente
 load_dotenv()
+
+# Verificar variáveis de ambiente
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
+port = int(os.getenv("PORT", "8000"))
+
+logger.info(f"Iniciando aplicação na porta {port}")
+logger.info(f"Supabase URL configurada: {'Sim' if supabase_url else 'Não'}")
+logger.info(f"Supabase Key configurada: {'Sim' if supabase_key else 'Não'}")
+
+if not supabase_url or not supabase_key:
+    logger.error("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
+    raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
+
+# Cache global para rostos conhecidos
+rostos_cache: Dict[str, List] = {
+    "encodings": [],
+    "nomes": [],
+    "ids": []
+}
+
+def verificar_conexao_supabase() -> bool:
+    try:
+        logger.info("Verificando conexão com Supabase...")
+        response = supabase.table('colaborador').select("count", count='exact').execute()
+        count = response.count if hasattr(response, 'count') else 0
+        logger.info(f"Conexão com Supabase OK. Total de registros: {count}")
+        return True
+    except Exception as e:
+        logger.error(f"Erro na conexão com Supabase: {str(e)}")
+        return False
+
+from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -28,7 +62,17 @@ async def lifespan(app: FastAPI):
     Gerencia o ciclo de vida da aplicação
     """
     try:
-        logger.info("=== Iniciando carregamento do cache ===")
+        logger.info("=== Iniciando aplicação ===")
+        
+        # Inicializar cliente Supabase
+        try:
+            logger.info("Inicializando cliente Supabase...")
+            global supabase
+            supabase = create_client(supabase_url, supabase_key)
+            logger.info("Cliente Supabase inicializado com sucesso")
+        except Exception as e:
+            logger.error(f"Erro ao inicializar Supabase: {str(e)}")
+            raise
         
         # Verificar conexão com Supabase
         if not verificar_conexao_supabase():
@@ -37,9 +81,9 @@ async def lifespan(app: FastAPI):
             return
         
         # Limpar cache e coletar lixo
-        rostos_cache["encodings"].clear()
-        rostos_cache["nomes"].clear()
-        rostos_cache["ids"].clear()
+        rostos_cache["encodings"] = []
+        rostos_cache["nomes"] = []
+        rostos_cache["ids"] = []
         gc.collect()
         
         logger.info("Buscando dados do Supabase...")
@@ -64,23 +108,25 @@ async def lifespan(app: FastAPI):
                     
                 logger.info(f"Processando {nome} (ID: {id_pessoa})")
                 
-                img_response = requests.get(foto_url, timeout=10)
+                # Aumentar timeout para downloads lentos
+                img_response = requests.get(foto_url, timeout=30)
                 if img_response.status_code != 200:
-                    logger.error(f"Falha ao baixar imagem de {nome}. Status: {img_response.status_code}")
+                    logger.error(f"Falha ao baixar imagem. Status: {img_response.status_code}")
                     continue
                 
                 img_array = np.frombuffer(img_response.content, dtype=np.uint8)
                 img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                 
                 if img is None:
-                    logger.error(f"Falha ao decodificar imagem de {nome}")
+                    logger.error("Falha ao decodificar imagem")
                     continue
                 
-                # Reduzir tamanho da imagem para processamento mais rápido
-                scale_percent = 50
-                width = int(img.shape[1] * scale_percent / 100)
-                height = int(img.shape[0] * scale_percent / 100)
-                img = cv2.resize(img, (width, height))
+                # Reduzir tamanho da imagem
+                height, width = img.shape[:2]
+                max_size = 800
+                if height > max_size or width > max_size:
+                    scale = max_size / max(height, width)
+                    img = cv2.resize(img, None, fx=scale, fy=scale)
                 
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 
@@ -113,6 +159,7 @@ async def lifespan(app: FastAPI):
         logger.info("=== Resumo do carregamento ===")
         logger.info(f"Total de rostos no cache: {len(rostos_cache['encodings'])}")
         logger.info(f"Nomes carregados: {rostos_cache['nomes']}")
+        logger.info("=== Aplicação pronta ===")
         
     except Exception as e:
         logger.error(f"Erro crítico no carregamento do cache: {str(e)}")
@@ -120,56 +167,43 @@ async def lifespan(app: FastAPI):
     yield
     
     logger.info("Limpando recursos...")
-    rostos_cache["encodings"].clear()
-    rostos_cache["nomes"].clear()
-    rostos_cache["ids"].clear()
+    rostos_cache["encodings"] = []
+    rostos_cache["nomes"] = []
+    rostos_cache["ids"] = []
     gc.collect()
 
-# Verificar variáveis de ambiente
-supabase_url = os.getenv("SUPABASE_URL")
-supabase_key = os.getenv("SUPABASE_KEY")
-port = int(os.getenv("PORT", "8000"))
+# Criar a aplicação FastAPI
+app = FastAPI(
+    title="API de Reconhecimento Facial",
+    description="API para reconhecimento facial usando FastAPI e face_recognition",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
-if not supabase_url or not supabase_key:
-    raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos no arquivo .env")
-
-# Inicializar cliente Supabase
-try:
-    logger.info("Inicializando cliente Supabase...")
-    supabase = create_client(supabase_url, supabase_key)
-    logger.info("Cliente Supabase inicializado com sucesso")
-except Exception as e:
-    logger.error(f"Erro ao inicializar Supabase: {str(e)}")
-    raise
-
-# Cache global para rostos conhecidos
-rostos_cache = {
-    "encodings": [],
-    "nomes": [],
-    "ids": []
-}
-
-def verificar_conexao_supabase():
-    try:
-        logger.info("Verificando conexão com Supabase...")
-        response = supabase.table('colaborador').select("count", count='exact').execute()
-        logger.info("Conexão com Supabase estabelecida com sucesso")
-        return True
-    except Exception as e:
-        logger.error(f"Erro na conexão com Supabase: {str(e)}")
-        return False
-
-# Criar a aplicação FastAPI com o gerenciador de ciclo de vida
-app = FastAPI(lifespan=lifespan)
-
-# Configurações CORS para produção
+# Configurações CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Ajuste isso para seus domínios permitidos em produção
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/")
+async def root():
+    """
+    Rota de teste e status da API
+    """
+    try:
+        memory_info = gc.get_stats()
+        return {
+            "status": "online",
+            "total_rostos": len(rostos_cache["encodings"]),
+            "memory_info": memory_info
+        }
+    except Exception as e:
+        logger.error(f"Erro na rota root: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status-cache")
 async def status_cache():
@@ -185,12 +219,6 @@ async def status_cache():
         logger.error(f"Erro ao verificar status do cache: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/")
-async def root():
-    response = supabase.table('colaborador').select("url_foto").execute()
-    num_rostos = len([registro for registro in response.data if registro.get('url_foto')])
-    return {"total_rostos_encontrados": num_rostos}
-
 @app.post("/reconhecer")
 async def reconhecer_frame(file: UploadFile = File(...)):
     """
@@ -200,8 +228,18 @@ async def reconhecer_frame(file: UploadFile = File(...)):
         logger.info("Iniciando reconhecimento de face...")
         logger.info(f"Cache atual contém {len(rostos_cache['encodings'])} rostos")
         
-        # Ler o arquivo de imagem
+        if len(rostos_cache["encodings"]) == 0:
+            logger.error("Cache vazio. Verifique a conexão com o Supabase")
+            raise HTTPException(
+                status_code=503,
+                detail="Sistema não está pronto. Cache de rostos vazio."
+            )
+        
         contents = await file.read()
+        if not contents:
+            logger.error("Arquivo vazio recebido")
+            raise HTTPException(status_code=400, detail="Arquivo vazio")
+            
         np_array = np.frombuffer(contents, dtype=np.uint8)
         frame = cv2.imdecode(np_array, cv2.IMREAD_COLOR)
 
@@ -209,27 +247,26 @@ async def reconhecer_frame(file: UploadFile = File(...)):
             logger.error("Imagem inválida recebida")
             raise HTTPException(status_code=400, detail="Imagem inválida")
 
-        # Reduzir o tamanho do frame para processamento mais rápido
-        scale_percent = 50
-        width = int(frame.shape[1] * scale_percent / 100)
-        height = int(frame.shape[0] * scale_percent / 100)
-        small_frame = cv2.resize(frame, (width, height))
-        rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+        # Reduzir tamanho para processamento mais rápido
+        height, width = frame.shape[:2]
+        max_size = 800
+        if height > max_size or width > max_size:
+            scale = max_size / max(height, width)
+            frame = cv2.resize(frame, None, fx=scale, fy=scale)
 
-        # Encontrar rostos no frame
-        face_locations = face_recognition.face_locations(rgb_small_frame, model="hog", number_of_times_to_upsample=1)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        face_locations = face_recognition.face_locations(rgb_frame, model="hog", number_of_times_to_upsample=1)
         logger.info(f"Encontrados {len(face_locations)} rostos na imagem")
 
         if not face_locations:
             logger.info("Nenhum rosto encontrado na imagem")
             return {"nome": None, "id": None}
 
-        face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations, num_jitters=1)
+        face_encodings = face_recognition.face_encodings(rgb_frame, face_locations, num_jitters=1)
         logger.info(f"Gerados {len(face_encodings)} encodings")
 
-        # Para cada rosto encontrado
         for face_encoding in face_encodings:
-            # Verificar matches com tolerância ajustada
             matches = face_recognition.compare_faces(rostos_cache["encodings"], face_encoding, tolerance=0.6)
             logger.info(f"Resultados da comparação: {matches}")
 
@@ -239,8 +276,6 @@ async def reconhecer_frame(file: UploadFile = File(...)):
                 id_pessoa = rostos_cache["ids"][first_match_index]
                 logger.info(f"Match encontrado: {nome} (ID: {id_pessoa})")
                 return {"nome": nome, "id": id_pessoa}
-            else:
-                logger.info("Nenhum match encontrado nos rostos conhecidos")
 
         logger.info("Nenhum rosto reconhecido")
         return {"nome": "Desconhecido", "id": None}
@@ -248,73 +283,3 @@ async def reconhecer_frame(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Erro durante o reconhecimento: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/atualizar-cache")
-async def atualizar_cache():
-    """
-    Atualiza o cache de rostos do Supabase
-    """
-    try:
-        # Limpar cache atual
-        rostos_cache["encodings"].clear()
-        rostos_cache["nomes"].clear()
-        rostos_cache["ids"].clear()
-
-        # Recarregar dados
-        response = supabase.table('colaborador').select("id, nome, url_foto").execute()
-        for registro in response.data:
-            try:
-                foto_url = registro.get('url_foto')
-                if foto_url:
-                    img_response = requests.get(foto_url)
-                    if img_response.status_code == 200:
-                        img_array = np.frombuffer(img_response.content, dtype=np.uint8)
-                        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                        encoding = face_recognition.face_encodings(img)
-                        if encoding:
-                            rostos_cache["encodings"].append(encoding[0])
-                            rostos_cache["nomes"].append(registro.get('nome'))
-                            rostos_cache["ids"].append(registro.get('id'))
-            except Exception as e:
-                logger.error(f"Erro ao processar registro {registro.get('id')}: {e}")
-        
-        return {"message": f"Cache atualizado com {len(rostos_cache['encodings'])} rostos"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-def carregar_rostos_do_supabase():
-    """
-    Carrega os rostos da tabela do Supabase e gera os encodings
-    """
-    try:
-        # Limpar os arrays
-        rostos_conhecidos = []
-        nomes_conhecidos = []
-        ids_conhecidos = []
-        
-        # Buscar dados do Supabase
-        response = supabase.table('colaborador').select("id, nome, url_foto").execute()
-        
-        if not response.data:
-            logger.warning("Nenhum registro encontrado na tabela 'colaborador'")
-            return 0
-            
-        logger.info(f"Encontrados {len(response.data)} registros")
-        num_rostos_validos = 0
-        
-        for registro in response.data:
-            try:
-                # Verificar se existe url_foto
-                foto_url = registro.get('url_foto')
-                if not foto_url:
-                    logger.warning(f"Colaborador {registro.get('nome')} (ID: {registro.get('id')}) não possui foto")
-                else:
-                    # Aqui você pode adicionar a lógica para gerar os encodings dos rostos
-                    num_rostos_validos += 1
-            except Exception as e:
-                logger.error(f"Erro ao processar registro {registro.get('id')}: {e}")
-        logger.info(f"Total de rostos válidos: {num_rostos_validos}")
-        return num_rostos_validos
-    except Exception as e:
-        logger.error(f"Erro ao carregar rostos do Supabase: {e}")
-        return 0

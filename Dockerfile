@@ -4,7 +4,15 @@ FROM python:3.9-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    # Otimizações de memória Python
+    PYTHONMALLOC=malloc \
+    MALLOC_TRIM_THRESHOLD_=100000 \
+    # Otimizações OpenCV
+    OPENCV_OPENCL_RUNTIME="" \
+    OPENCV_OPENCL_DEVICE="" \
+    # Otimizações face_recognition
+    FACE_RECOGNITION_MODEL="hog"
 
 WORKDIR /app
 
@@ -23,7 +31,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Instalar dlib primeiro
 COPY requirements.txt .
 RUN pip install --no-cache-dir dlib==19.24.1 \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && rm -rf ~/.cache/pip/*
 
 # Copiar apenas os arquivos necessários
 COPY api.py .
@@ -31,9 +40,10 @@ COPY api.py .
 # Expor a porta que a aplicação vai usar
 EXPOSE 8000
 
-# Configurar limites de memória para Python
-ENV PYTHONMALLOC=malloc \
-    MALLOC_TRIM_THRESHOLD_=100000
+# Configurar limites de memória para o container
+ENV UVICORN_WORKERS=1 \
+    UVICORN_LIMIT_CONCURRENCY=1 \
+    UVICORN_TIMEOUT=600
 
-# Comando para iniciar a aplicação com workers otimizados
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "1", "--timeout-keep-alive", "30"]
+# Comando para iniciar a aplicação com workers otimizados e timeout aumentado
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--limit-concurrency", "1", "--timeout-keep-alive", "60", "--timeout", "600"]
