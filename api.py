@@ -56,9 +56,18 @@ def carregar_rostos_do_supabase():
         
         for registro in response.data:
             try:
+                # Verificar se existe url_foto
+                foto_url = registro.get('url_foto')
+                if not foto_url:
+                    print(f"Colaborador {registro.get('nome')} (ID: {registro.get('id')}) não possui foto")
+                    continue
+
                 # Baixar a foto do Supabase
-                foto_url = registro['url_foto']
                 response_foto = requests.get(foto_url)
+                if response_foto.status_code != 200:
+                    print(f"Erro ao baixar foto do colaborador {registro.get('nome')} (ID: {registro.get('id')})")
+                    continue
+
                 img = Image.open(BytesIO(response_foto.content))
                 
                 # Converter para array numpy
