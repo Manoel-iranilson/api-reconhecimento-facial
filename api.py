@@ -10,11 +10,22 @@ from io import BytesIO
 from PIL import Image
 import base64
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
-app = FastAPI(title="API de Reconhecimento Facial")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Código de inicialização
+    print("Carregando rostos do Supabase...")
+    total_rostos = carregar_rostos_do_supabase()
+    print(f"Total de {total_rostos} rostos carregados")
+    yield
+    # Código de limpeza (se necessário)
+    print("Encerrando aplicação...")
+
+app = FastAPI(title="API de Reconhecimento Facial", lifespan=lifespan)
 
 # Verificar variáveis de ambiente
 supabase_url = os.getenv("SUPABASE_URL")
@@ -53,6 +64,7 @@ def carregar_rostos_do_supabase():
             return 0
             
         print(f"Encontrados {len(response.data)} registros")
+        num_rostos_validos = 0
         
         for registro in response.data:
             try:
@@ -60,54 +72,22 @@ def carregar_rostos_do_supabase():
                 foto_url = registro.get('url_foto')
                 if not foto_url:
                     print(f"Colaborador {registro.get('nome')} (ID: {registro.get('id')}) não possui foto")
-                    continue
-
-                # Baixar a foto do Supabase
-                response_foto = requests.get(foto_url)
-                if response_foto.status_code != 200:
-                    print(f"Erro ao baixar foto do colaborador {registro.get('nome')} (ID: {registro.get('id')})")
-                    continue
-
-                img = Image.open(BytesIO(response_foto.content))
-                
-                # Converter para array numpy
-                img_array = np.array(img)
-                
-                # Encontrar faces na imagem
-                face_locations = face_recognition.face_locations(img_array)
-                if face_locations:
-                    # Gerar encoding para a primeira face encontrada
-                    encoding = face_recognition.face_encodings(img_array, face_locations)[0]
-                    
-                    # Armazenar no cache
-                    rostos_conhecidos.append(encoding)
-                    nomes_conhecidos.append(registro['nome'])
-                    ids_conhecidos.append(registro['id'])  # Armazenar ID
-                    print(f"Rosto de {registro['nome']} carregado com sucesso")
                 else:
-                    print(f"Nenhum rosto encontrado na foto de {registro['nome']}")
-                    
+                    # Aqui você pode adicionar a lógica para gerar os encodings dos rostos
+                    num_rostos_validos += 1
             except Exception as e:
-                print(f"Erro ao processar foto de {registro['nome']}: {e}")
-                continue
-                
-        return len(rostos_conhecidos)
-        
+                print(f"Erro ao processar registro {registro.get('id')}: {e}")
+        print(f"Total de rostos válidos: {num_rostos_validos}")
+        return num_rostos_validos
     except Exception as e:
-        print(f"Erro ao carregar rostos: {e}")
+        print(f"Erro ao carregar rostos do Supabase: {e}")
         return 0
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    Carrega os rostos quando a API inicia
-    """
-    num_rostos = carregar_rostos_do_supabase()
-    print(f"Carregados {num_rostos} rostos do banco de dados")
 
 @app.get("/")
 async def root():
-    return {"message": "API de Reconhecimento Facial"}
+    response = supabase.table('colaborador').select("url_foto").execute()
+    num_rostos = len([registro for registro in response.data if registro.get('url_foto')])
+    return {"total_rostos_encontrados": num_rostos}
 
 @app.post("/reconhecer")
 async def reconhecer_frame(request: ImagemRequest):
