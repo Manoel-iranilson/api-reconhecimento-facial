@@ -46,10 +46,10 @@ def carregar_rostos_do_supabase():
         ids_conhecidos.clear()  # Limpar IDs também
         
         # Buscar dados do Supabase
-        response = supabase.table('pessoas').select("id, nome, foto").execute()
+        response = supabase.table('colaborador').select("id, nome, url_foto").execute()
         
         if not response.data:
-            print("Nenhum registro encontrado na tabela 'pessoas'")
+            print("Nenhum registro encontrado na tabela 'colaborador'")
             return 0
             
         print(f"Encontrados {len(response.data)} registros")
@@ -57,7 +57,7 @@ def carregar_rostos_do_supabase():
         for registro in response.data:
             try:
                 # Baixar a foto do Supabase
-                foto_url = registro['foto']
+                foto_url = registro['url_foto']
                 response_foto = requests.get(foto_url)
                 img = Image.open(BytesIO(response_foto.content))
                 
