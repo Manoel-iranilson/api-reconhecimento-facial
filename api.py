@@ -36,6 +36,10 @@ rostos_cache: Dict[str, List] = {
     "ids": []
 }
 
+# Listas para monitoramento
+pessoas_sem_foto: List[Dict] = []
+pessoas_sem_face_detectada: List[Dict] = []
+
 # Carregar o classificador Haar Cascade
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
@@ -46,6 +50,8 @@ async def carregar_cache():
         rostos_cache["faces"].clear()
         rostos_cache["nomes"].clear()
         rostos_cache["ids"].clear()
+        pessoas_sem_foto.clear()
+        pessoas_sem_face_detectada.clear()
         gc.collect()
 
         # Buscar dados do Supabase
@@ -72,6 +78,10 @@ async def carregar_cache():
                 if not foto_url:
                     sem_url += 1
                     logger.warning(f"Registro sem URL de foto: {nome}")
+                    pessoas_sem_foto.append({
+                        "id": id_pessoa,
+                        "nome": nome
+                    })
                     continue
 
                 # Baixar e processar imagem
@@ -96,6 +106,11 @@ async def carregar_cache():
                 if len(faces) == 0:
                     sem_face += 1
                     logger.warning(f"Nenhuma face detectada na foto de {nome}")
+                    pessoas_sem_face_detectada.append({
+                        "id": id_pessoa,
+                        "nome": nome,
+                        "url_foto": foto_url
+                    })
                     continue
                 
                 faces_detectadas += 1
@@ -159,6 +174,8 @@ async def lifespan(app: FastAPI):
     rostos_cache["faces"].clear()
     rostos_cache["nomes"].clear()
     rostos_cache["ids"].clear()
+    pessoas_sem_foto.clear()
+    pessoas_sem_face_detectada.clear()
     gc.collect()
     logger.info("Cache limpo com sucesso!")
 
@@ -187,6 +204,34 @@ async def status():
         "cache_size": len(rostos_cache["faces"]),
         "total_pessoas": len(rostos_cache["nomes"]),
         "memoria_cache_mb": sum(face.nbytes for face in rostos_cache["faces"]) / (1024 * 1024)
+    }
+
+@app.get("/monitoramento/sem-foto")
+async def listar_pessoas_sem_foto():
+    """Endpoint para listar pessoas sem foto cadastrada"""
+    return {
+        "total": len(pessoas_sem_foto),
+        "pessoas": sorted(pessoas_sem_foto, key=lambda x: x["nome"])
+    }
+
+@app.get("/monitoramento/sem-face-detectada")
+async def listar_pessoas_sem_face():
+    """Endpoint para listar pessoas cujas faces não foram detectadas nas fotos"""
+    return {
+        "total": len(pessoas_sem_face_detectada),
+        "pessoas": sorted(pessoas_sem_face_detectada, key=lambda x: x["nome"])
+    }
+
+@app.get("/monitoramento/estatisticas")
+async def estatisticas_gerais():
+    """Endpoint para mostrar estatísticas gerais do sistema"""
+    total_cadastrados = len(rostos_cache["faces"]) + len(pessoas_sem_foto) + len(pessoas_sem_face_detectada)
+    return {
+        "total_cadastrados": total_cadastrados,
+        "faces_detectadas": len(rostos_cache["faces"]),
+        "sem_foto": len(pessoas_sem_foto),
+        "sem_face_detectada": len(pessoas_sem_face_detectada),
+        "taxa_sucesso": f"{(len(rostos_cache['faces']) / total_cadastrados * 100):.1f}%"
     }
 
 @app.post("/reconhecer")
