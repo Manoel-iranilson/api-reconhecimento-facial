@@ -115,15 +115,24 @@ async def lifespan(app: FastAPI):
         # Inicializar Supabase
         global supabase
         supabase = create_client(supabase_url, supabase_key)
+        
+        # Carregar o cache ao iniciar
+        logger.info("Iniciando carregamento do cache...")
+        await carregar_cache()
+        logger.info("Cache carregado com sucesso!")
+        
     except Exception as e:
         logger.error(f"Erro na inicialização: {str(e)}")
         raise
     yield
-    # Limpar recursos
+    
+    # Limpar o cache ao encerrar
+    logger.info("Limpando cache...")
     rostos_cache["encodings"].clear()
     rostos_cache["nomes"].clear()
     rostos_cache["ids"].clear()
     gc.collect()
+    logger.info("Cache limpo com sucesso!")
 
 # Criar aplicação FastAPI
 app = FastAPI(lifespan=lifespan)
