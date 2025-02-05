@@ -54,7 +54,14 @@ async def carregar_cache():
             logger.warning("Nenhum registro encontrado")
             return
 
-        logger.info(f"Processando {len(response.data)} registros")
+        total_registros = len(response.data)
+        logger.info(f"Processando {total_registros} registros")
+        
+        sem_url = 0
+        erro_download = 0
+        erro_decode = 0
+        sem_face = 0
+        faces_detectadas = 0
         
         for registro in response.data:
             try:
@@ -63,34 +70,45 @@ async def carregar_cache():
                 id_pessoa = registro.get('id')
 
                 if not foto_url:
+                    sem_url += 1
+                    logger.warning(f"Registro sem URL de foto: {nome}")
                     continue
 
                 # Baixar e processar imagem
                 img_response = requests.get(foto_url, timeout=30)
                 if img_response.status_code != 200:
+                    erro_download += 1
+                    logger.warning(f"Erro ao baixar foto de {nome}: Status {img_response.status_code}")
                     continue
 
                 # Converter imagem
                 img_array = np.frombuffer(img_response.content, dtype=np.uint8)
                 img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                 if img is None:
+                    erro_decode += 1
+                    logger.warning(f"Erro ao decodificar imagem de {nome}")
                     continue
 
                 # Detectar face
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 faces = face_cascade.detectMultiScale(gray, 1.3, 5)
                 
-                if len(faces) > 0:
-                    # Pegar a primeira face detectada
-                    (x, y, w, h) = faces[0]
-                    face = img[y:y+h, x:x+w]
-                    # Redimensionar para um tamanho padrão
-                    face = cv2.resize(face, (100, 100))
-                    
-                    # Adicionar ao cache
-                    rostos_cache["faces"].append(face)
-                    rostos_cache["nomes"].append(nome)
-                    rostos_cache["ids"].append(id_pessoa)
+                if len(faces) == 0:
+                    sem_face += 1
+                    logger.warning(f"Nenhuma face detectada na foto de {nome}")
+                    continue
+                
+                faces_detectadas += 1
+                # Pegar a primeira face detectada
+                (x, y, w, h) = faces[0]
+                face = img[y:y+h, x:x+w]
+                # Redimensionar para um tamanho padrão
+                face = cv2.resize(face, (100, 100))
+                
+                # Adicionar ao cache
+                rostos_cache["faces"].append(face)
+                rostos_cache["nomes"].append(nome)
+                rostos_cache["ids"].append(id_pessoa)
 
                 # Limpar memória
                 del img_array
@@ -101,7 +119,16 @@ async def carregar_cache():
                 logger.error(f"Erro ao processar {nome}: {str(e)}")
                 continue
 
-        logger.info(f"Cache carregado com sucesso. Total de faces: {len(rostos_cache['faces'])}")
+        # Log final com estatísticas
+        logger.info(f"""
+Estatísticas do processamento:
+- Total de registros: {total_registros}
+- Registros sem URL: {sem_url}
+- Erros de download: {erro_download}
+- Erros de decodificação: {erro_decode}
+- Fotos sem face detectada: {sem_face}
+- Faces detectadas com sucesso: {faces_detectadas}
+""")
 
     except Exception as e:
         logger.error(f"Erro ao carregar cache: {str(e)}")
@@ -196,20 +223,32 @@ async def reconhecer_frame(file: UploadFile = File(...)):
             menor_diferenca = float('inf')
             
             for i, face_cache in enumerate(rostos_cache["faces"]):
-                # Calcular diferença entre as imagens
-                diferenca = np.mean(cv2.absdiff(face_detectada, face_cache))
+                # Calcular diferença entre as imagens usando vários métodos
+                # Diferença absoluta média
+                diff_abs = np.mean(cv2.absdiff(face_detectada, face_cache))
                 
-                if diferenca < menor_diferenca:
-                    menor_diferenca = diferenca
+                # Diferença estrutural (SSIM)
+                gray_detectada = cv2.cvtColor(face_detectada, cv2.COLOR_BGR2GRAY)
+                gray_cache = cv2.cvtColor(face_cache, cv2.COLOR_BGR2GRAY)
+                score_ssim = cv2.matchTemplate(gray_detectada, gray_cache, cv2.TM_CCOEFF_NORMED)[0][0]
+                
+                # Combinar as métricas (quanto menor diff_abs e maior score_ssim, melhor)
+                diferenca_combinada = diff_abs * (1 - score_ssim)
+                
+                if diferenca_combinada < menor_diferenca:
+                    menor_diferenca = diferenca_combinada
                     melhor_match = i
 
             # Se encontrou um match com diferença aceitável
-            if melhor_match is not None and menor_diferenca < 50:  # Ajuste este threshold conforme necessário
-                resultados.append({
-                    "id": rostos_cache["ids"][melhor_match],
-                    "nome": rostos_cache["nomes"][melhor_match],
-                    "confianca": float(100 - menor_diferenca)
-                })
+            # Ajustado para ser mais rigoroso
+            if melhor_match is not None and menor_diferenca < 25:  # Threshold mais rigoroso
+                confianca = max(0, min(100, 100 * (1 - menor_diferenca/25)))
+                if confianca > 80:  # Só aceita matches com alta confiança
+                    resultados.append({
+                        "id": rostos_cache["ids"][melhor_match],
+                        "nome": rostos_cache["nomes"][melhor_match],
+                        "confianca": float(confianca)
+                    })
 
         tempo_processamento = time.time() - start_time
         return {
