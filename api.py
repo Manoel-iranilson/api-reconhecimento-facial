@@ -11,6 +11,7 @@ import gc
 from typing import Dict, List
 from starlette.responses import JSONResponse
 import time
+import face_recognition
 
 # Configurar logging
 logging.basicConfig(
@@ -99,11 +100,11 @@ async def carregar_cache():
                     logger.warning(f"Erro ao decodificar imagem de {nome}")
                     continue
 
-                # Detectar face
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+                # Converter para RGB e extrair encoding
+                rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                face_locations = face_recognition.face_locations(rgb_img)
                 
-                if len(faces) == 0:
+                if not face_locations:
                     sem_face += 1
                     logger.warning(f"Nenhuma face detectada na foto de {nome}")
                     pessoas_sem_face_detectada.append({
@@ -112,19 +113,20 @@ async def carregar_cache():
                         "url_foto": foto_url
                     })
                     continue
+                    
+                face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
                 
-                faces_detectadas += 1
-                # Pegar a primeira face detectada
-                (x, y, w, h) = faces[0]
-                face = img[y:y+h, x:x+w]
-                # Redimensionar para um tamanho padrão
-                face = cv2.resize(face, (100, 100))
-                
-                # Adicionar ao cache
-                rostos_cache["faces"].append(face)
-                rostos_cache["nomes"].append(nome)
-                rostos_cache["ids"].append(id_pessoa)
-
+                if face_encodings:
+                    rostos_cache["faces"].append(face_encodings[0])  # Armazena o encoding
+                    rostos_cache["ids"].append(id_pessoa)
+                    rostos_cache["nomes"].append(nome)
+                else:
+                    pessoas_sem_face_detectada.append({
+                        "id": id_pessoa,
+                        "nome": nome,
+                        "url_foto": foto_url
+                    })
+                        
                 # Limpar memória
                 del img_array
                 del img
@@ -251,49 +253,34 @@ async def reconhecer_frame(file: UploadFile = File(...)):
         if img is None:
             raise HTTPException(status_code=400, detail="Erro ao processar imagem")
 
-        # Detectar faces na imagem
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        # Converter para RGB (face_recognition usa RGB)
+        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         
-        if len(faces) == 0:
+        # Detectar faces e extrair encodings
+        face_locations = face_recognition.face_locations(rgb_img)
+        if not face_locations:
             return {"matches": [], "tempo_processamento": time.time() - start_time}
-
+            
+        face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
+        
         resultados = []
-        for (x, y, w, h) in faces:
-            face_detectada = img[y:y+h, x:x+w]
-            face_detectada = cv2.resize(face_detectada, (100, 100))
+        for face_encoding in face_encodings:
+            # Comparar com faces no cache usando face_recognition.compare_faces
+            matches = face_recognition.compare_faces(rostos_cache["faces"], face_encoding, tolerance=0.6)
+            face_distances = face_recognition.face_distance(rostos_cache["faces"], face_encoding)
             
-            # Comparar com faces no cache
-            melhor_match = None
-            menor_diferenca = float('inf')
-            
-            for i, face_cache in enumerate(rostos_cache["faces"]):
-                # Calcular diferença entre as imagens usando vários métodos
-                # Diferença absoluta média
-                diff_abs = np.mean(cv2.absdiff(face_detectada, face_cache))
+            if True in matches:
+                melhor_match_idx = np.argmin(face_distances)
+                menor_distancia = face_distances[melhor_match_idx]
                 
-                # Diferença estrutural (SSIM)
-                gray_detectada = cv2.cvtColor(face_detectada, cv2.COLOR_BGR2GRAY)
-                gray_cache = cv2.cvtColor(face_cache, cv2.COLOR_BGR2GRAY)
-                score_ssim = cv2.matchTemplate(gray_detectada, gray_cache, cv2.TM_CCOEFF_NORMED)[0][0]
+                # Calcular confiança baseada na distância
+                confianca = max(0, min(100, 100 * (1 - menor_distancia/0.6)))
                 
-                # Combinar as métricas (quanto menor diff_abs e maior score_ssim, melhor)
-                diferenca_combinada = diff_abs * (1 - score_ssim)
-                
-                if diferenca_combinada < menor_diferenca:
-                    menor_diferenca = diferenca_combinada
-                    melhor_match = i
-
-            # Se encontrou um match com diferença aceitável
-            # Ajustado para ser mais rigoroso
-            if melhor_match is not None and menor_diferenca < 25:  # Threshold mais rigoroso
-                confianca = max(0, min(100, 100 * (1 - menor_diferenca/25)))
-                if confianca > 80:  # Só aceita matches com alta confiança
-                    resultados.append({
-                        "id": rostos_cache["ids"][melhor_match],
-                        "nome": rostos_cache["nomes"][melhor_match],
-                        "confianca": float(confianca)
-                    })
+                resultados.append({
+                    "id": rostos_cache["ids"][melhor_match_idx],
+                    "nome": rostos_cache["nomes"][melhor_match_idx],
+                    "confianca": float(confianca)
+                })
 
         tempo_processamento = time.time() - start_time
         return {
