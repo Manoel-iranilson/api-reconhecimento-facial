@@ -6,15 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    git \
-    cmake \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
-
-# Instalar face_recognition via pip usando wheels pré-compilados
-RUN pip install --no-cache-dir face_recognition==1.3.0
 
 # Copiar requirements e instalar dependências
 COPY requirements.txt .

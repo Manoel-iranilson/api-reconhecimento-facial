@@ -11,7 +11,6 @@ import gc
 from typing import Dict, List
 from starlette.responses import JSONResponse
 import time
-import face_recognition
 
 # Configurar logging
 logging.basicConfig(
@@ -41,8 +40,110 @@ rostos_cache: Dict[str, List] = {
 pessoas_sem_foto: List[Dict] = []
 pessoas_sem_face_detectada: List[Dict] = []
 
-# Carregar o classificador Haar Cascade
+# Carregar os classificadores
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
+
+# Criar reconhecedor LBPH com parâmetros otimizados
+recognizer = cv2.face.LBPHFaceRecognizer_create(
+    radius=1,  # Reduzido para ser menos sensível a detalhes
+    neighbors=8,  # Reduzido para ser mais tolerante
+    grid_x=8,
+    grid_y=8,
+    threshold=200.0  # Aumentado para ser mais permissivo
+)
+
+def preprocessar_imagem(img):
+    """Pré-processa a imagem para melhorar a detecção"""
+    # Converter para escala de cinza
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    
+    # Equalização do histograma para melhorar o contraste
+    gray = cv2.equalizeHist(gray)
+    
+    # Aplicar filtro bilateral para reduzir ruído mantendo bordas
+    gray = cv2.bilateralFilter(gray, 9, 75, 75)
+    
+    # Normalizar a imagem
+    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+    
+    return gray
+
+def detectar_face(img):
+    """Detecta face e olhos para garantir que é um rosto real"""
+    gray = preprocessar_imagem(img)
+    
+    # Detectar faces com parâmetros ajustados
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,  # Escala menor para detecção mais precisa
+        minNeighbors=5,   # Mais vizinhos para reduzir falsos positivos
+        minSize=(30, 30)  # Tamanho mínimo da face
+    )
+    
+    if len(faces) == 0:
+        return None
+    
+    # Pegar a maior face detectada
+    face = max(faces, key=lambda x: x[2] * x[3])
+    (x, y, w, h) = face
+    
+    # Aumentar ligeiramente a área da face para incluir mais contexto
+    margin = int(0.1 * w)  # 10% de margem
+    x = max(0, x - margin)
+    y = max(0, y - margin)
+    w = min(gray.shape[1] - x, w + 2*margin)
+    h = min(gray.shape[0] - y, h + 2*margin)
+    
+    # Recortar região da face
+    face_roi = gray[y:y+h, x:x+w]
+    
+    # Detectar olhos na região da face
+    eyes = eye_cascade.detectMultiScale(face_roi)
+    
+    # Se não detectou pelo menos 1 olho, pode não ser um rosto real
+    if len(eyes) < 1:
+        return None
+    
+    # Redimensionar para tamanho padrão maior
+    face_img = cv2.resize(face_roi, (200, 200))  # Aumentado para 200x200
+    
+    # Aplicar normalização adicional
+    face_img = cv2.normalize(face_img, None, 0, 255, cv2.NORM_MINMAX)
+    
+    return face_img
+
+def calcular_similaridade(img1, img2):
+    """Calcula a similaridade entre duas imagens usando múltiplos métodos"""
+    # Normalizar imagens
+    img1 = cv2.normalize(img1, None, 0, 255, cv2.NORM_MINMAX)
+    img2 = cv2.normalize(img2, None, 0, 255, cv2.NORM_MINMAX)
+    
+    # Calcular MSE
+    err = np.sum((img1.astype("float") - img2.astype("float")) ** 2)
+    err /= float(img1.shape[0] * img1.shape[1])
+    mse_similarity = 1 - (err / 255**2)
+    
+    # Calcular correlação
+    correlation = np.corrcoef(img1.flatten(), img2.flatten())[0,1]
+    
+    # Calcular histograma com máscara
+    mask = np.ones_like(img1, dtype=np.uint8)
+    hist1 = cv2.calcHist([img1], [0], mask, [64], [0, 256])  # Reduzido para 64 bins
+    hist2 = cv2.calcHist([img2], [0], mask, [64], [0, 256])
+    
+    # Normalizar histogramas
+    cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+    cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+    
+    hist_similarity = cv2.compareHist(hist1, hist2, cv2.HISTCMP_INTERSECT)
+    
+    # Combinar as métricas (média ponderada ajustada)
+    similarity = (0.5 * mse_similarity + 
+                 0.3 * max(0, correlation) + 
+                 0.2 * hist_similarity)
+    
+    return similarity
 
 async def carregar_cache():
     """Função para carregar o cache de rostos"""
@@ -100,11 +201,9 @@ async def carregar_cache():
                     logger.warning(f"Erro ao decodificar imagem de {nome}")
                     continue
 
-                # Converter para RGB e extrair encoding
-                rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-                face_locations = face_recognition.face_locations(rgb_img)
-                
-                if not face_locations:
+                # Detectar e processar face
+                face_img = detectar_face(img)
+                if face_img is None:
                     sem_face += 1
                     logger.warning(f"Nenhuma face detectada na foto de {nome}")
                     pessoas_sem_face_detectada.append({
@@ -113,20 +212,12 @@ async def carregar_cache():
                         "url_foto": foto_url
                     })
                     continue
-                    
-                face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
                 
-                if face_encodings:
-                    rostos_cache["faces"].append(face_encodings[0])  # Armazena o encoding
-                    rostos_cache["ids"].append(id_pessoa)
-                    rostos_cache["nomes"].append(nome)
-                else:
-                    pessoas_sem_face_detectada.append({
-                        "id": id_pessoa,
-                        "nome": nome,
-                        "url_foto": foto_url
-                    })
-                        
+                faces_detectadas += 1
+                rostos_cache["faces"].append(face_img)
+                rostos_cache["ids"].append(id_pessoa)
+                rostos_cache["nomes"].append(nome)
+                
                 # Limpar memória
                 del img_array
                 del img
@@ -135,6 +226,12 @@ async def carregar_cache():
             except Exception as e:
                 logger.error(f"Erro ao processar {nome}: {str(e)}")
                 continue
+
+        # Treinar reconhecedor com todas as faces
+        if faces_detectadas > 0:
+            faces = np.array(rostos_cache["faces"])
+            labels = np.array(range(len(rostos_cache["faces"])))
+            recognizer.train(faces, labels)
 
         # Log final com estatísticas
         logger.info(f"""
@@ -253,34 +350,42 @@ async def reconhecer_frame(file: UploadFile = File(...)):
         if img is None:
             raise HTTPException(status_code=400, detail="Erro ao processar imagem")
 
-        # Converter para RGB (face_recognition usa RGB)
-        rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        # Detectar faces e extrair encodings
-        face_locations = face_recognition.face_locations(rgb_img)
-        if not face_locations:
+        # Detectar face na imagem
+        face_img = detectar_face(img)
+        if face_img is None:
             return {"matches": [], "tempo_processamento": time.time() - start_time}
-            
-        face_encodings = face_recognition.face_encodings(rgb_img, face_locations)
         
         resultados = []
-        for face_encoding in face_encodings:
-            # Comparar com faces no cache usando face_recognition.compare_faces
-            matches = face_recognition.compare_faces(rostos_cache["faces"], face_encoding, tolerance=0.6)
-            face_distances = face_recognition.face_distance(rostos_cache["faces"], face_encoding)
+        melhor_match = None
+        maior_confianca = 0
+        
+        # Tentar reconhecer com diferentes parâmetros
+        for threshold in [200, 300, 400]:  # Tentar diferentes thresholds
+            recognizer.setThreshold(threshold)
+            label, confidence = recognizer.predict(face_img)
             
-            if True in matches:
-                melhor_match_idx = np.argmin(face_distances)
-                menor_distancia = face_distances[melhor_match_idx]
+            # Converter confiança para porcentagem
+            confianca_base = max(0, min(100, 100 * (1 - confidence/300)))  # Threshold mais permissivo
+            
+            if confianca_base > 20:  # Threshold muito baixo para pegar mais matches
+                face_cache = rostos_cache["faces"][label]
+                similarity = calcular_similaridade(face_img, face_cache)
                 
-                # Calcular confiança baseada na distância
-                confianca = max(0, min(100, 100 * (1 - menor_distancia/0.6)))
+                # Calcular confiança final
+                confianca_final = (confianca_base * 0.6 + similarity * 100 * 0.4)
                 
-                resultados.append({
-                    "id": rostos_cache["ids"][melhor_match_idx],
-                    "nome": rostos_cache["nomes"][melhor_match_idx],
-                    "confianca": float(confianca)
-                })
+                # Atualizar melhor match se encontrou um com maior confiança
+                if confianca_final > maior_confianca:
+                    maior_confianca = confianca_final
+                    melhor_match = {
+                        "id": rostos_cache["ids"][label],
+                        "nome": rostos_cache["nomes"][label],
+                        "confianca": float(confianca_final)
+                    }
+        
+        # Adicionar o melhor match encontrado
+        if melhor_match is not None:
+            resultados.append(melhor_match)
 
         tempo_processamento = time.time() - start_time
         return {
