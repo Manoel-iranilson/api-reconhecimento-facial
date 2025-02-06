@@ -1,4 +1,4 @@
-FROM python:3.9-slim
+FROM ageitgey/face_recognition:latest
 
 WORKDIR /app
 
@@ -6,13 +6,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
-    cmake \
-    build-essential \
-    pkg-config \
-    libx11-dev \
-    libatlas-base-dev \
-    libgtk-3-dev \
-    libboost-python-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements e instalar dependências
