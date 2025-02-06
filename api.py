@@ -426,3 +426,39 @@ async def reconhecer_frame(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Erro no reconhecimento: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/redefinir-cache")
+async def redefinir_cache():
+    """Endpoint para forçar uma redefinição do cache"""
+    try:
+        logger.info("Iniciando redefinição do cache...")
+        
+        # Limpar cache atual
+        rostos_cache["faces"].clear()
+        rostos_cache["nomes"].clear()
+        rostos_cache["ids"].clear()
+        pessoas_sem_foto.clear()
+        pessoas_sem_face_detectada.clear()
+        
+        # Forçar coleta de lixo
+        gc.collect()
+        
+        # Recarregar cache
+        await carregar_cache()
+        
+        return {
+            "status": "sucesso",
+            "mensagem": "Cache redefinido com sucesso",
+            "estatisticas": {
+                "faces_carregadas": len(rostos_cache["faces"]),
+                "pessoas_sem_foto": len(pessoas_sem_foto),
+                "pessoas_sem_face": len(pessoas_sem_face_detectada)
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao redefinir cache: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao redefinir cache: {str(e)}"
+        )
