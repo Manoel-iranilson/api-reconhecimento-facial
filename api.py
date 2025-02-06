@@ -161,11 +161,11 @@ async def carregar_cache():
         pessoas_sem_face_detectada.clear()
         
         # Buscar registros
-        response = supabase.table("pessoas").select("*").execute()
+        response = supabase.table("colaborador").select("*").execute()
         registros = response.data
         
         if not registros:
-            logger.warning("Nenhum registro encontrado na tabela pessoas")
+            logger.warning("Nenhum registro encontrado na tabela colaborador")
             return
             
         logger.info(f"Processando {len(registros)} registros")
