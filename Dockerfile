@@ -1,12 +1,21 @@
-FROM ageitgey/face_recognition:latest
+FROM python:3.9
 
 WORKDIR /app
 
-# Instalar dependências do sistema necessárias
+# Instalar dependências do sistema necessárias para dlib e face_recognition
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+    build-essential \
+    cmake \
+    libopenblas-dev \
+    liblapack-dev \
+    libx11-dev \
+    libgtk-3-dev \
+    python3-dev \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Instalar dlib primeiro
+RUN pip install dlib==19.24.1
 
 # Copiar requirements e instalar dependências
 COPY requirements.txt .
