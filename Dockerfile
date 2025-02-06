@@ -1,21 +1,20 @@
-FROM python:3.9
+FROM python:3.9-slim
 
 WORKDIR /app
 
-# Instalar dependências do sistema necessárias para dlib e face_recognition
+# Instalar dependências do sistema necessárias
 RUN apt-get update && apt-get install -y \
-    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    git \
     cmake \
-    libopenblas-dev \
-    liblapack-dev \
-    libx11-dev \
-    libgtk-3-dev \
-    python3-dev \
-    python3-pip \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar dlib primeiro
-RUN pip install dlib==19.24.1
+# Instalar face_recognition via pip usando wheels pré-compilados
+RUN pip install --no-cache-dir face_recognition==1.3.0
 
 # Copiar requirements e instalar dependências
 COPY requirements.txt .
