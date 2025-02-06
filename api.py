@@ -148,35 +148,45 @@ def calcular_similaridade(img1, img2):
 async def carregar_cache():
     """Função para carregar o cache de rostos"""
     try:
-        # Limpar cache existente
+        logger.info("Iniciando carregamento do cache...")
+        
+        # Criar cliente Supabase
+        supabase = create_client(supabase_url, supabase_key)
+        
+        # Limpar cache atual
         rostos_cache["faces"].clear()
         rostos_cache["nomes"].clear()
         rostos_cache["ids"].clear()
         pessoas_sem_foto.clear()
         pessoas_sem_face_detectada.clear()
-        gc.collect()
-
-        # Buscar dados do Supabase
-        response = supabase.table('colaborador').select("id, nome, url_foto").execute()
-        if not response.data:
-            logger.warning("Nenhum registro encontrado")
-            return
-
-        total_registros = len(response.data)
-        logger.info(f"Processando {total_registros} registros")
         
+        # Buscar registros
+        response = supabase.table("pessoas").select("*").execute()
+        registros = response.data
+        
+        if not registros:
+            logger.warning("Nenhum registro encontrado na tabela pessoas")
+            return
+            
+        logger.info(f"Processando {len(registros)} registros")
+        
+        # Contadores para estatísticas
         sem_url = 0
         erro_download = 0
         erro_decode = 0
-        sem_face = 0
         faces_detectadas = 0
+        sem_face = 0
         
-        for registro in response.data:
+        faces_temp = []
+        ids_temp = []
+        nomes_temp = []
+        
+        for registro in registros:
             try:
-                foto_url = registro.get('url_foto')
-                nome = registro.get('nome')
-                id_pessoa = registro.get('id')
-
+                id_pessoa = registro.get("id")
+                nome = registro.get("nome", "Nome não informado")
+                foto_url = registro.get("url_foto")
+                
                 if not foto_url:
                     sem_url += 1
                     logger.warning(f"Registro sem URL de foto: {nome}")
@@ -185,68 +195,86 @@ async def carregar_cache():
                         "nome": nome
                     })
                     continue
-
-                # Baixar e processar imagem
-                img_response = requests.get(foto_url, timeout=30)
-                if img_response.status_code != 200:
+                
+                # Download da imagem
+                try:
+                    response = requests.get(foto_url)
+                    response.raise_for_status()
+                except Exception as e:
                     erro_download += 1
-                    logger.warning(f"Erro ao baixar foto de {nome}: Status {img_response.status_code}")
+                    logger.error(f"Erro ao baixar foto de {nome}: {str(e)}")
                     continue
-
-                # Converter imagem
-                img_array = np.frombuffer(img_response.content, dtype=np.uint8)
-                img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                if img is None:
+                
+                # Decodificar imagem
+                try:
+                    img_array = np.frombuffer(response.content, np.uint8)
+                    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    if img is None:
+                        raise ValueError("Imagem inválida")
+                except Exception as e:
                     erro_decode += 1
                     logger.warning(f"Erro ao decodificar imagem de {nome}")
                     continue
 
                 # Detectar e processar face
-                face_img = detectar_face(img)
-                if face_img is None:
-                    sem_face += 1
-                    logger.warning(f"Nenhuma face detectada na foto de {nome}")
-                    pessoas_sem_face_detectada.append({
-                        "id": id_pessoa,
-                        "nome": nome,
-                        "url_foto": foto_url
-                    })
+                try:
+                    face_img = detectar_face(img)
+                    if face_img is None:
+                        sem_face += 1
+                        logger.warning(f"Nenhuma face detectada na foto de {nome}")
+                        pessoas_sem_face_detectada.append({
+                            "id": id_pessoa,
+                            "nome": nome,
+                            "url_foto": foto_url
+                        })
+                        continue
+                    
+                    faces_detectadas += 1
+                    faces_temp.append(face_img)
+                    ids_temp.append(id_pessoa)
+                    nomes_temp.append(nome)
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar face de {nome}: {str(e)}")
                     continue
-                
-                faces_detectadas += 1
-                rostos_cache["faces"].append(face_img)
-                rostos_cache["ids"].append(id_pessoa)
-                rostos_cache["nomes"].append(nome)
-                
+                    
                 # Limpar memória
                 del img_array
                 del img
                 gc.collect()
-
+                
             except Exception as e:
                 logger.error(f"Erro ao processar {nome}: {str(e)}")
                 continue
 
         # Treinar reconhecedor com todas as faces
-        if faces_detectadas > 0:
-            faces = np.array(rostos_cache["faces"])
-            labels = np.array(range(len(rostos_cache["faces"])))
-            recognizer.train(faces, labels)
-
-        # Log final com estatísticas
-        logger.info(f"""
+        if faces_temp:
+            try:
+                faces = np.array(faces_temp)
+                labels = np.array(range(len(faces_temp)))
+                recognizer.train(faces, labels)
+                
+                # Atualizar cache apenas após treino bem sucedido
+                rostos_cache["faces"] = faces_temp
+                rostos_cache["ids"] = ids_temp
+                rostos_cache["nomes"] = nomes_temp
+                
+                logger.info(f"""
 Estatísticas do processamento:
-- Total de registros: {total_registros}
+- Total de registros: {len(registros)}
 - Registros sem URL: {sem_url}
 - Erros de download: {erro_download}
-- Erros de decodificação: {erro_decode}
-- Fotos sem face detectada: {sem_face}
+- Erros de decode: {erro_decode}
+- Faces não detectadas: {sem_face}
 - Faces detectadas com sucesso: {faces_detectadas}
 """)
-
+            except Exception as e:
+                logger.error(f"Erro ao treinar reconhecedor: {str(e)}")
+                raise
+                
     except Exception as e:
-        logger.error(f"Erro ao carregar cache: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Erro no carregamento do cache: {str(e)}")
+        raise
 
 from contextlib import asynccontextmanager
 
