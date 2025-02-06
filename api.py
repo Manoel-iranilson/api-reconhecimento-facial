@@ -161,6 +161,7 @@ async def carregar_cache():
         pessoas_sem_face_detectada.clear()
         
         # Buscar registros
+        logger.info("Buscando registros do Supabase...")
         response = supabase.table("colaborador").select("*").execute()
         registros = response.data
         
@@ -198,7 +199,8 @@ async def carregar_cache():
                 
                 # Download da imagem
                 try:
-                    response = requests.get(foto_url)
+                    logger.info(f"Baixando foto de {nome}...")
+                    response = requests.get(foto_url, timeout=30)
                     response.raise_for_status()
                 except Exception as e:
                     erro_download += 1
@@ -207,17 +209,19 @@ async def carregar_cache():
                 
                 # Decodificar imagem
                 try:
+                    logger.info(f"Decodificando imagem de {nome}...")
                     img_array = np.frombuffer(response.content, np.uint8)
                     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                     if img is None:
                         raise ValueError("Imagem inválida")
                 except Exception as e:
                     erro_decode += 1
-                    logger.warning(f"Erro ao decodificar imagem de {nome}")
+                    logger.error(f"Erro ao decodificar imagem de {nome}: {str(e)}")
                     continue
 
                 # Detectar e processar face
                 try:
+                    logger.info(f"Detectando face de {nome}...")
                     face_img = detectar_face(img)
                     if face_img is None:
                         sem_face += 1
@@ -230,6 +234,7 @@ async def carregar_cache():
                         continue
                     
                     faces_detectadas += 1
+                    logger.info(f"Face detectada com sucesso para {nome}")
                     faces_temp.append(face_img)
                     ids_temp.append(id_pessoa)
                     nomes_temp.append(nome)
@@ -250,6 +255,7 @@ async def carregar_cache():
         # Treinar reconhecedor com todas as faces
         if faces_temp:
             try:
+                logger.info("Iniciando treinamento do reconhecedor...")
                 faces = np.array(faces_temp)
                 labels = np.array(range(len(faces_temp)))
                 recognizer.train(faces, labels)
@@ -268,6 +274,8 @@ Estatísticas do processamento:
 - Faces não detectadas: {sem_face}
 - Faces detectadas com sucesso: {faces_detectadas}
 """)
+                logger.info("Cache carregado com sucesso!")
+                
             except Exception as e:
                 logger.error(f"Erro ao treinar reconhecedor: {str(e)}")
                 raise
@@ -280,31 +288,17 @@ from contextlib import asynccontextmanager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Contexto de vida da aplicação"""
     try:
-        # Inicializar Supabase
-        global supabase
-        supabase = create_client(supabase_url, supabase_key)
-        
-        # Carregar o cache ao iniciar
-        logger.info("Iniciando carregamento do cache...")
+        logger.info("Iniciando aplicação...")
         await carregar_cache()
-        logger.info("Cache carregado com sucesso!")
-        
+        logger.info("Aplicação iniciada com sucesso!")
+        yield
     except Exception as e:
         logger.error(f"Erro na inicialização: {str(e)}")
         raise
-    
-    yield
-    
-    # Limpar o cache ao encerrar
-    logger.info("Limpando cache...")
-    rostos_cache["faces"].clear()
-    rostos_cache["nomes"].clear()
-    rostos_cache["ids"].clear()
-    pessoas_sem_foto.clear()
-    pessoas_sem_face_detectada.clear()
-    gc.collect()
-    logger.info("Cache limpo com sucesso!")
+    finally:
+        logger.info("Finalizando aplicação...")
 
 # Criar aplicação FastAPI
 app = FastAPI(lifespan=lifespan)
