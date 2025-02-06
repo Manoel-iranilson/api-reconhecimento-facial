@@ -55,6 +55,13 @@ recognizer = cv2.face.LBPHFaceRecognizer_create(
 
 def preprocessar_imagem(img):
     """Pré-processa a imagem para melhorar a detecção"""
+    # Redimensionar imagem para melhor performance
+    max_size = 800
+    height, width = img.shape[:2]
+    if height > max_size or width > max_size:
+        scale = max_size / max(height, width)
+        img = cv2.resize(img, None, fx=scale, fy=scale)
+    
     # Converter para escala de cinza
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     
@@ -64,21 +71,19 @@ def preprocessar_imagem(img):
     # Aplicar filtro bilateral para reduzir ruído mantendo bordas
     gray = cv2.bilateralFilter(gray, 9, 75, 75)
     
-    # Normalizar a imagem
-    gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-    
     return gray
 
 def detectar_face(img):
     """Detecta face e olhos para garantir que é um rosto real"""
     gray = preprocessar_imagem(img)
     
-    # Detectar faces com parâmetros ajustados
+    # Detectar faces com parâmetros otimizados para performance
     faces = face_cascade.detectMultiScale(
         gray,
-        scaleFactor=1.1,  # Escala menor para detecção mais precisa
-        minNeighbors=5,   # Mais vizinhos para reduzir falsos positivos
-        minSize=(30, 30)  # Tamanho mínimo da face
+        scaleFactor=1.2,  # Aumentado para melhor performance
+        minNeighbors=4,   # Reduzido para melhor performance
+        minSize=(60, 60), # Aumentado tamanho mínimo
+        maxSize=(800, 800) # Limitado tamanho máximo
     )
     
     if len(faces) == 0:
@@ -98,18 +103,21 @@ def detectar_face(img):
     # Recortar região da face
     face_roi = gray[y:y+h, x:x+w]
     
-    # Detectar olhos na região da face
-    eyes = eye_cascade.detectMultiScale(face_roi)
+    # Detectar olhos com parâmetros otimizados
+    eyes = eye_cascade.detectMultiScale(
+        face_roi,
+        scaleFactor=1.1,
+        minNeighbors=3,
+        minSize=(20, 20),
+        maxSize=(w//3, h//3)
+    )
     
     # Se não detectou pelo menos 1 olho, pode não ser um rosto real
     if len(eyes) < 1:
         return None
     
-    # Redimensionar para tamanho padrão maior
-    face_img = cv2.resize(face_roi, (200, 200))  # Aumentado para 200x200
-    
-    # Aplicar normalização adicional
-    face_img = cv2.normalize(face_img, None, 0, 255, cv2.NORM_MINMAX)
+    # Redimensionar para tamanho padrão
+    face_img = cv2.resize(face_roi, (200, 200))
     
     return face_img
 
@@ -197,10 +205,10 @@ async def carregar_cache():
                     })
                     continue
                 
-                # Download da imagem
+                # Download da imagem com timeout reduzido
                 try:
                     logger.info(f"Baixando foto de {nome}...")
-                    response = requests.get(foto_url, timeout=30)
+                    response = requests.get(foto_url, timeout=10)
                     response.raise_for_status()
                 except Exception as e:
                     erro_download += 1
