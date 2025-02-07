@@ -6,28 +6,16 @@ services:
     container_name: reconhecimento-facial-api
     ports:
       - "8000:8000"
-    environment:
-      - SUPABASE_URL=${SUPABASE_URL}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - PYTHONUNBUFFERED=1
-      - WORKERS=1
-      - TIMEOUT=300
-      - LOG_LEVEL=INFO
+    env_file:
+      - .env
     volumes:
       - ./:/app
-      - ./logs:/var/log/app
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
     deploy:
       resources:
         limits:
-          cpus: '1'
+          cpus: '1.5'
           memory: 2G
         reservations:
-          cpus: '0.5'
+          cpus: '1'
           memory: 1G

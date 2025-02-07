@@ -1,38 +1,51 @@
-# Sistema de Reconhecimento Facial
+# API de Reconhecimento Facial
 
-Este é um projeto simples de reconhecimento facial usando Python, OpenCV e face_recognition.
+## Pré-requisitos
+- Docker
+- Docker Compose
 
-## Requisitos
+## Configuração
 
-- Python 3.8 ou superior
-- Webcam
-
-## Instalação
-
-1. Instale as dependências necessárias:
+1. Clone o repositório
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/seu-usuario/reconhecimento-facial.git
+cd reconhecimento-facial
 ```
 
-## Como usar
-
-1. Execute o programa principal:
+2. Copie o arquivo de exemplo de variáveis de ambiente
 ```bash
-python main.py
+cp .env.example .env
 ```
 
-2. O programa irá abrir sua webcam e começar a detectar rostos automaticamente.
-3. Pressione 'q' para sair do programa.
+3. Edite o `.env` com suas configurações
 
-## Funcionalidades
+## Implantação no Digital Ocean
 
-- Detecção de rostos em tempo real
-- Desenho de retângulos ao redor dos rostos detectados
-- Possibilidade de adicionar pessoas conhecidas ao sistema
-- Reconhecimento de pessoas já cadastradas
+### Preparação do Droplet
+1. Crie um Droplet com Docker pré-instalado
+2. Conecte-se via SSH
+3. Clone o repositório
+4. Configure as variáveis de ambiente
 
-## Observações
+### Comandos de Implantação
+```bash
+# Construir e iniciar o container
+docker-compose up -d --build
 
-- O programa usa sua webcam para capturar imagens em tempo real
-- Os rostos detectados são marcados com um retângulo vermelho
-- Pessoas não cadastradas são marcadas como "Desconhecido"
+# Verificar logs
+docker-compose logs -f api
+
+# Parar a aplicação
+docker-compose down
+```
+
+## Endpoints
+- `/status`: Informações do sistema
+- `/reconhecer`: Endpoint de reconhecimento facial
+- `/monitoramento/sem-foto`: Colaboradores sem foto
+- `/monitoramento/sem-face-detectada`: Colaboradores sem face detectada
+
+## Troubleshooting
+- Verifique as variáveis de ambiente
+- Confirme a conectividade com o Supabase
+- Verifique os logs do container

@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 from starlette.responses import JSONResponse
 import time
 import face_recognition
+import platform
+import datetime
 
 # Configurar logging
 logging.basicConfig(
@@ -189,14 +191,51 @@ async def root():
     return {"message": "API de Reconhecimento Facial"}
 
 @app.get("/status")
-async def status():
-    """Endpoint de status detalhado"""
-    return {
-        "status": "online",
-        "cache_size": len(rostos_cache["encodings"]),
-        "total_pessoas": len(rostos_cache["nomes"]),
-        "memoria_cache_mb": sum(face.nbytes for face in rostos_cache["encodings"]) / (1024 * 1024)
-    }
+async def get_status():
+    """
+    Endpoint de status detalhado para monitoramento do sistema de reconhecimento facial.
+    
+    Retorna informações abrangentes sobre o estado atual da aplicação.
+    """
+    try:
+        # Cálculos de estatísticas do cache
+        total_cadastrados = len(rostos_cache["encodings"]) + len(pessoas_sem_foto) + len(pessoas_sem_face_detectada)
+        faces_detectadas = len(rostos_cache["encodings"])
+        
+        # Cálculo de memória utilizada
+        memoria_total = sum(
+            sum(encoding.nbytes for encoding in encodings_list) 
+            for encodings_list in rostos_cache["encodings"]
+        ) / (1024 * 1024)  # Converter para MB
+        
+        # Calcular taxa de sucesso
+        taxa_sucesso = (faces_detectadas / total_cadastrados * 100) if total_cadastrados > 0 else 0
+        
+        return {
+            "status": "online",
+            "sistema": {
+                "versao_api": "1.0.0",
+                "ambiente": "production"
+            },
+            "cache": {
+                "total_cadastrados": total_cadastrados,
+                "faces_detectadas": faces_detectadas,
+                "colaboradores_sem_foto": len(pessoas_sem_foto),
+                "colaboradores_sem_face_detectada": len(pessoas_sem_face_detectada),
+                "memoria_utilizada_mb": round(memoria_total, 2),
+                "taxa_sucesso_reconhecimento": f"{taxa_sucesso:.2f}%"
+            },
+            "dependencias": {
+                "python": platform.python_version(),
+                "face_recognition": face_recognition.__version__,
+                "opencv": cv2.__version__,
+                "numpy": np.__version__
+            },
+            "ultima_atualizacao_cache": datetime.datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Erro ao obter status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
 @app.get("/monitoramento/sem-foto")
 async def listar_pessoas_sem_foto():
