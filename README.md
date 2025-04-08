@@ -8,7 +8,7 @@
 
 1. Clone o repositório
 ```bash
-git clone https://github.com/Manoel-iranilson/reconhecimento-facial.git
+git clone https://github.com/Manoel-iranilson/api-reconhecimento-facil
 cd reconhecimento-facial
 ```
 
