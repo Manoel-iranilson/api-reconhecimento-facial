@@ -24,11 +24,11 @@ COPY requirements.txt .
 # Update pip and install build tools
 RUN pip install --no-cache-dir -U pip wheel setuptools
 
-# Install dlib using a pre-built wheel
-RUN pip install --no-cache-dir --prefer-binary dlib==19.24.0
+# Install dlib using a pre-built wheel for x86_64 architecture
+RUN pip install --no-cache-dir --only-binary=:all: dlib==19.24.0
 
 # Install face_recognition (which depends on dlib)
-RUN pip install --no-cache-dir --prefer-binary face_recognition
+RUN pip install --no-cache-dir --only-binary=:all: face_recognition
 
 # Now install the rest of the requirements
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
