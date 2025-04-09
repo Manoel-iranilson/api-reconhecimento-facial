@@ -21,19 +21,21 @@ RUN apt-get update && apt-get install -y \
 # Install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir wheel setuptools
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install face_recognition package
+# Install dlib separately first with CMake configuration
+RUN pip install --no-cache-dir dlib --install-option="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+# Install face_recognition before other requirements
 RUN pip install --no-cache-dir face_recognition
+# Now install the rest of the requirements
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
 
 # Expose port
-EXPOSE 8000
+EXPOSE 8001
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 
 # Command to run the application
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8001"]
