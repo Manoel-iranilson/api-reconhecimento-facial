@@ -1,34 +1,33 @@
-FROM python:3.10-slim-bullseye
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# Instalar dependências do sistema
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
-    git \
-    wget \
-    unzip \
-    libsm6 \
-    libxext6 \
     libopenblas-dev \
     liblapack-dev \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
+    libx11-dev \
+    libgtk-3-dev \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar wheel para compilação de pacotes
-RUN pip install --no-cache-dir wheel
-
-# Copiar requirements.txt e instalar dependências
+# Install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar o resto do código
+# Install face_recognition package
+RUN pip install --no-cache-dir face_recognition
+
+# Copy application code
 COPY . .
 
-# Expor a porta 8000 (padrão do FastAPI)
+# Expose port
 EXPOSE 8000
 
-# Comando para executar a aplicação
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+
+# Command to run the application
 CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
