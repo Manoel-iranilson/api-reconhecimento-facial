@@ -21,10 +21,14 @@ RUN apt-get update && apt-get install -y \
 # Install Python packages
 COPY requirements.txt .
 RUN pip install --no-cache-dir wheel setuptools
-# Install dlib separately first with CMake configuration
-RUN pip install --no-cache-dir dlib --install-option="-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
-# Install face_recognition before other requirements
+
+# Set CMake version policy
+ENV CMAKE_POLICY_DEFAULT_CMP0048=NEW
+
+# Install dlib and face_recognition first
+RUN pip install --no-cache-dir dlib==19.24.0
 RUN pip install --no-cache-dir face_recognition
+
 # Now install the rest of the requirements
 RUN pip install --no-cache-dir -r requirements.txt
 
