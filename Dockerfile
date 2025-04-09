@@ -11,10 +11,16 @@ RUN apt-get update && apt-get install -y \
     libx11-dev \
     libgtk-3-dev \
     python3-dev \
+    pkg-config \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
 COPY requirements.txt .
+RUN pip install --no-cache-dir wheel setuptools
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install face_recognition package
