@@ -28,6 +28,8 @@ load_dotenv()
 # Verificar variáveis de ambiente
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
+supabase_table = os.getenv("SUPABASE_TABLE")
+photo_column = os.getenv("PHOTO_COLUMN")
 
 if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
@@ -37,8 +39,7 @@ rostos_cache: Dict[str, List] = {
     "encodings": [],  # Lista de codificações faciais
     "nomes": [],     # Lista de nomes correspondentes
     "ids": [],        # Lista de IDs correspondentes
-    "numeros": [],   # Lista de números correspondentes
-    "pontos": []     # Lista de pontos correspondentes
+    
 }
 
 # Listas para monitoramento
@@ -48,8 +49,6 @@ rostos_cache = {
     "encodings": [],
     "nomes": [],
     "ids": [],
-    "numeros": [],  # Add this line
-    "pontos": []    # Add this line
 }
 
 def processar_imagem(image_array: np.ndarray) -> Optional[List]:
@@ -98,14 +97,12 @@ async def carregar_cache():
         rostos_cache["encodings"].clear()
         rostos_cache["nomes"].clear()
         rostos_cache["ids"].clear()
-        rostos_cache["numeros"].clear()
-        rostos_cache["pontos"].clear()
         pessoas_sem_foto.clear()
         pessoas_sem_face_detectada.clear()
         
         # Buscar registros do Supabase
         logger.info("Buscando registros do Supabase...")
-        response = supabase.table('colaborador').select('*').execute()
+        response = supabase.table(supabase_table).select('*').execute()
         registros = response.data
         
         if not registros:
@@ -117,9 +114,7 @@ async def carregar_cache():
         for registro in registros:
             nome = registro.get('nome', '')
             id_pessoa = registro.get('id')
-            numero = registro.get('numero', '')
-            pontos = registro.get('pontos', 0)
-            fotos = registro.get('reconhecimento', [])  # Array de URLs de fotos
+            fotos = registro.get(photo_column, [])  # Array de URLs de fotos
             
             if not fotos:
                 pessoas_sem_foto.append({"id": id_pessoa, "nome": nome})
@@ -161,8 +156,6 @@ async def carregar_cache():
                 rostos_cache["encodings"].append(encodings_pessoa)
                 rostos_cache["nomes"].append(nome)
                 rostos_cache["ids"].append(id_pessoa)
-                rostos_cache["numeros"].append(numero)
-                rostos_cache["pontos"].append(pontos)
             else:
                 pessoas_sem_face_detectada.append({"id": id_pessoa, "nome": nome})
         
@@ -336,9 +329,7 @@ async def reconhecer_frame(file: UploadFile = File(...)):
                             "nome": rostos_cache["nomes"][idx],
                             "confianca": float(confianca),
                             "distancia": float(melhor_distancia),
-                            "media_distancias": float(media_distancias),
-                            "numero": rostos_cache["numeros"][idx],
-                            "pontos": rostos_cache["pontos"][idx]
+                            "media_distancias": float(media_distancias),              
                         })
             
             if matches:
@@ -369,8 +360,6 @@ async def redefinir_cache():
         rostos_cache["encodings"].clear()
         rostos_cache["nomes"].clear()
         rostos_cache["ids"].clear()
-        rostos_cache["numeros"].clear()
-        rostos_cache["pontos"].clear()
         pessoas_sem_foto.clear()
         pessoas_sem_face_detectada.clear()
         
