@@ -16,22 +16,18 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    libboost-all-dev \
+    libdlib-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages
 COPY requirements.txt .
-
-# Update pip and install build tools
-RUN pip install --no-cache-dir -U pip wheel setuptools
-
-# Install dlib using a pre-built wheel for x86_64 architecture
-RUN pip install --no-cache-dir --only-binary=:all: dlib==19.24.0
-
-# Install face_recognition (which depends on dlib)
-RUN pip install --no-cache-dir --only-binary=:all: face_recognition
-
-# Now install the rest of the requirements
-RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
+RUN pip install --no-cache-dir wheel setuptools
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir --no-build-isolation --force-reinstall \
+    dlib==19.24.2 \
+    face_recognition==1.3.0 \
+    -r requirements.txt
 
 # Copy application code
 COPY . .

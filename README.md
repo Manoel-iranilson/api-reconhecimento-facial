@@ -27,7 +27,9 @@ cp .env.example .env
 3. Clone o repositório
 4. Configure as variáveis de ambiente
 
-### Comandos de Implantação
+### Opções de Implantação
+
+#### Opção 1 — Construção Direta na VM
 ```bash
 # Construir e iniciar o container
 docker-compose up -d --build
@@ -38,6 +40,39 @@ docker-compose logs -f api
 # Parar a aplicação
 docker-compose down
 ```
+
+#### Opção 2 — Gerar a imagem no seu computador e enviar para VM
+Se o seu PC é mais potente, você pode:
+
+1. Buildar a imagem localmente:
+```bash
+docker build -t reconhecimento-facil-sebrae .
+```
+
+2. Exportar para um arquivo .tar:
+```bash
+docker save -o reconhecimento-facil-sebrae.tar reconhecimento-facil-sebrae
+```
+
+3. Transferir para a VM via scp:
+```bash
+scp reconhecimento-facil-sebrae.tar usuario@ip-da-vm:~/
+```
+
+4. Na VM, importar a imagem:
+```bash
+docker load -i reconhecimento-facil-sebrae.tar
+```
+
+5. Rodar o container:
+```bash
+docker run -p 8000:8000 reconhecimento-facil-sebrae
+```
+
+### Comandos Úteis
+- Verificar containers em execução: `docker ps`
+- Parar um container específico: `docker stop <container_id>`
+- Remover imagens não utilizadas: `docker image prune`
 
 ## Endpoints
 - `/status`: Informações do sistema
