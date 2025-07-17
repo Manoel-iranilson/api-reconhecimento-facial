@@ -30,6 +30,7 @@ supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_KEY")
 supabase_table = os.getenv("SUPABASE_TABLE")
 photo_column = os.getenv("PHOTO_COLUMN")
+sync_column = os.getenv("SYNC_COLUMN")
 
 if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
@@ -85,84 +86,155 @@ def processar_imagem(image_array: np.ndarray) -> Optional[List]:
         logger.error(f"Erro ao processar imagem: {str(e)}")
         return None
 
-async def carregar_cache():
+async def sincronizar_cache():
     """
-    Carrega o cache de rostos com as codificações faciais das pessoas.
+    Sincroniza o cache buscando apenas usuários que não estão sincronizados.
     """
     try:
-        logger.info("Iniciando carregamento do cache...")
+        logger.info("Iniciando sincronização do cache...")
         supabase = create_client(supabase_url, supabase_key)
-        
-        # Limpar cache atual
+
+        # Buscar registros não sincronizados
+        response = supabase.table(supabase_table).select('*').eq(sync_column, False).execute()
+        registros_para_sincronizar = response.data
+
+        if not registros_para_sincronizar:
+            logger.info("Nenhum registro novo para sincronizar.")
+            return 0
+
+        logger.info(f"Sincronizando {len(registros_para_sincronizar)} registros.")
+        sincronizados_com_sucesso = 0
+
+        for registro in registros_para_sincronizar:
+            nome = registro.get('nome', '')
+            id_pessoa = registro.get('id')
+            fotos = registro.get(photo_column, [])
+
+            # Remover dados antigos do cache, se existirem
+            if id_pessoa in rostos_cache["ids"]:
+                idx = rostos_cache["ids"].index(id_pessoa)
+                rostos_cache["ids"].pop(idx)
+                rostos_cache["nomes"].pop(idx)
+                rostos_cache["encodings"].pop(idx)
+                logger.info(f"Registro antigo de {nome} (ID: {id_pessoa}) removido do cache para atualização.")
+
+            if not fotos:
+                pessoas_sem_foto.append({"id": id_pessoa, "nome": nome})
+                continue
+
+            encodings_pessoa = []
+            faces_detectadas = False
+            for foto_url in fotos:
+                if not foto_url:
+                    logger.warning(f"URL da foto está vazia para {nome} (ID: {id_pessoa}).")
+                    continue
+                try:
+                    response_foto = requests.get(foto_url)
+                    if response_foto.status_code != 200:
+                        logger.warning(f"Falha ao baixar foto de {nome} (ID: {id_pessoa}) da URL: {foto_url}. Status: {response_foto.status_code}")
+                        continue
+                    nparr = np.frombuffer(response_foto.content, np.uint8)
+                    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                    if img is None:
+                        logger.warning(f"Não foi possível decodificar a imagem para {nome} (ID: {id_pessoa}) da URL: {foto_url}")
+                        continue
+                    face_encodings = processar_imagem(img)
+                    if face_encodings:
+                        logger.info(f"Face detectada com sucesso para {nome} (ID: {id_pessoa}) na foto: {foto_url}")
+                        faces_detectadas = True
+                        encodings_pessoa.extend(face_encodings)
+                except Exception as e:
+                    logger.error(f"Erro excepcional ao processar foto de {nome} (ID: {id_pessoa}): {str(e)}")
+
+            if faces_detectadas:
+                rostos_cache["encodings"].append(encodings_pessoa)
+                rostos_cache["nomes"].append(nome)
+                rostos_cache["ids"].append(id_pessoa)
+                logger.info(f"Sincronizando {nome} (ID: {id_pessoa}) com sucesso e atualizando status no DB.")
+                supabase.table(supabase_table).update({sync_column: True}).eq('id', id_pessoa).execute()
+                sincronizados_com_sucesso += 1
+            else:
+                logger.warning(f"Nenhuma face detectada para {nome} (ID: {id_pessoa}) em nenhuma das fotos fornecidas. Não será adicionado ao cache.")
+                pessoas_sem_face_detectada.append({"id": id_pessoa, "nome": nome})
+
+        logger.info(f"{sincronizados_com_sucesso} registros sincronizados com sucesso.")
+        return sincronizados_com_sucesso
+
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao sincronizar cache: {str(e)}")
+
+async def carregar_cache_completo():
+    """
+    Força o recarregamento completo do cache de rostos, buscando todos os registros.
+    """
+    try:
+        logger.info("Iniciando carregamento COMPLETO do cache...")
+        supabase = create_client(supabase_url, supabase_key)
+
+        # Limpar cache local
         rostos_cache["encodings"].clear()
         rostos_cache["nomes"].clear()
         rostos_cache["ids"].clear()
         pessoas_sem_foto.clear()
         pessoas_sem_face_detectada.clear()
-        
-        # Buscar registros do Supabase
-        logger.info("Buscando registros do Supabase...")
+        gc.collect()
+
+        # Buscar TODOS os registros do Supabase
+        logger.info("Buscando TODOS os registros do Supabase para recarga completa...")
         response = supabase.table(supabase_table).select('*').execute()
-        registros = response.data
-        
-        if not registros:
-            logger.warning("Nenhum registro encontrado no Supabase")
+        todos_registros = response.data
+
+        if not todos_registros:
+            logger.warning("Nenhum registro encontrado no Supabase para carregar.")
             return
-        
-        logger.info(f"Processando {len(registros)} registros")
-        
-        for registro in registros:
+
+        logger.info(f"Processando {len(todos_registros)} registros para recarga completa.")
+        ids_sincronizados = []
+
+        for registro in todos_registros:
             nome = registro.get('nome', '')
             id_pessoa = registro.get('id')
-            fotos = registro.get(photo_column, [])  # Array de URLs de fotos
-            
+            fotos = registro.get(photo_column, [])
+
             if not fotos:
                 pessoas_sem_foto.append({"id": id_pessoa, "nome": nome})
                 continue
-            
+
             encodings_pessoa = []
             faces_detectadas = False
-            
             for foto_url in fotos:
-                if not foto_url:  # Skip empty URLs
-                    continue
-                    
+                if not foto_url: continue
                 try:
-                    # Baixar imagem da URL
-                    response = requests.get(foto_url)
-                    if response.status_code != 200:
-                        logger.warning(f"Erro ao baixar foto de {nome} (ID: {id_pessoa}): Status {response.status_code}")
-                        continue
-                    
-                    # Converter para array numpy
-                    nparr = np.frombuffer(response.content, np.uint8)
+                    response_foto = requests.get(foto_url)
+                    if response_foto.status_code != 200: continue
+                    nparr = np.frombuffer(response_foto.content, np.uint8)
                     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    
-                    if img is None:
-                        logger.warning(f"Erro ao processar foto de {nome} (ID: {id_pessoa})")
-                        continue
-                    
-                    # Processar imagem e obter codificações
+                    if img is None: continue
                     face_encodings = processar_imagem(img)
                     if face_encodings:
                         faces_detectadas = True
                         encodings_pessoa.extend(face_encodings)
-                    
                 except Exception as e:
                     logger.error(f"Erro ao processar foto de {nome} (ID: {id_pessoa}): {str(e)}")
-                    continue
-            
+
             if faces_detectadas:
                 rostos_cache["encodings"].append(encodings_pessoa)
                 rostos_cache["nomes"].append(nome)
                 rostos_cache["ids"].append(id_pessoa)
+                ids_sincronizados.append(id_pessoa)
             else:
                 pessoas_sem_face_detectada.append({"id": id_pessoa, "nome": nome})
         
-        logger.info(f"Cache carregado com sucesso. {len(rostos_cache['encodings'])} pessoas com faces detectadas.")
-        
+        # Atualizar status de sincronização para TODOS os registros processados
+        if ids_sincronizados:
+            logger.info(f"Atualizando {len(ids_sincronizados)} registros para sync=true no Supabase.")
+            supabase.table(supabase_table).update({sync_column: True}).in_('id', ids_sincronizados).execute()
+
+        logger.info(f"Carregamento completo do cache finalizado. {len(rostos_cache['encodings'])} pessoas no cache.")
+
     except Exception as e:
-        logger.error(f"Erro ao carregar cache: {str(e)}")
+        logger.error(f"Erro no carregamento completo do cache: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 from contextlib import asynccontextmanager
@@ -171,8 +243,8 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Contexto de vida da aplicação"""
     try:
-        logger.info("Iniciando aplicação...")
-        await carregar_cache()
+        logger.info("Iniciando aplicação e sincronizando cache...")
+        await endpoint_redefinir_cache_completo()
         logger.info("Aplicação iniciada com sucesso!")
         yield
     except Exception as e:
@@ -350,38 +422,38 @@ async def reconhecer_frame(file: UploadFile = File(...)):
         logger.error(f"Erro no reconhecimento: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/redefinir-cache")
-async def redefinir_cache():
-    """Endpoint para forçar uma redefinição do cache"""
+@app.post("/sincronizar-cache")
+async def endpoint_sincronizar_cache():
+    """Endpoint para forçar uma sincronização do cache."""
     try:
-        logger.info("Iniciando redefinição do cache...")
-        
-        # Limpar cache atual
-        rostos_cache["encodings"].clear()
-        rostos_cache["nomes"].clear()
-        rostos_cache["ids"].clear()
-        pessoas_sem_foto.clear()
-        pessoas_sem_face_detectada.clear()
-        
-        # Forçar coleta de lixo
-        gc.collect()
-        
-        # Recarregar cache
-        await carregar_cache()
-        
+        registros_sincronizados = await sincronizar_cache()
         return {
             "status": "sucesso",
-            "mensagem": "Cache redefinido com sucesso",
-            "estatisticas": {
+            "mensagem": f"{registros_sincronizados} registros foram sincronizados.",
+            "estatisticas_atuais": {
                 "faces_carregadas": len(rostos_cache["encodings"]),
                 "pessoas_sem_foto": len(pessoas_sem_foto),
                 "pessoas_sem_face": len(pessoas_sem_face_detectada)
             }
         }
-        
+    except Exception as e:
+        logger.error(f"Erro ao sincronizar cache: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/redefinir-cache-completo")
+async def endpoint_redefinir_cache_completo():
+    """Endpoint para forçar uma redefinição completa do cache."""
+    try:
+        await carregar_cache_completo()
+        return {
+            "status": "sucesso",
+            "mensagem": "Cache completamente redefinido e sincronizado.",
+            "estatisticas_atuais": {
+                "faces_carregadas": len(rostos_cache["encodings"]),
+                "pessoas_sem_foto": len(pessoas_sem_foto),
+                "pessoas_sem_face": len(pessoas_sem_face_detectada)
+            }
+        }
     except Exception as e:
         logger.error(f"Erro ao redefinir cache: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao redefinir cache: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
