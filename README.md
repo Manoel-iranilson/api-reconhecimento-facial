@@ -46,27 +46,27 @@ Se o seu PC é mais potente, você pode:
 
 1. Buildar a imagem localmente:
 ```bash
-docker build -t reconhecimento-facil-sebrae .
+docker build -t reconhecimento-facial .
 ```
 
 2. Exportar para um arquivo .tar:
 ```bash
-docker save -o reconhecimento-facil-sebrae.tar reconhecimento-facil-sebrae
+docker save -o reconhecimento-facial.tar reconhecimento-facial
 ```
 
 3. Transferir para a VM via scp:
 ```bash
-scp reconhecimento-facil-sebrae.tar usuario@ip-da-vm:~/
+scp reconhecimento-facial.tar usuario@ip-da-vm:~/
 ```
 
 4. Na VM, importar a imagem:
 ```bash
-docker load -i reconhecimento-facil-sebrae.tar
+docker load -i reconhecimento-facial.tar
 ```
 
 5. Rodar o container:
 ```bash
-docker run -p 8000:8000 reconhecimento-facil-sebrae
+docker run -p 8001:8001 reconhecimento-facial
 ```
 
 ### Comandos Úteis
