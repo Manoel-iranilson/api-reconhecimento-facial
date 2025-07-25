@@ -413,8 +413,8 @@ async def reconhecer_frame(empresa_id: str, file: UploadFile = File(...)):
             best_match_index = np.argmin(distances)
             min_distance = distances[best_match_index]
 
-            # Threshold mais rigoroso (0.50) para evitar falsos positivos
-            if min_distance < 0.50:
+            # Threshold de produção (0.39) - Equilíbrio entre precisão e flexibilidade
+            if min_distance <= 0.41:
                 metadata = known_face_metadata_empresa[best_match_index]
                 confianca = (1 - min_distance) * 100
                 
