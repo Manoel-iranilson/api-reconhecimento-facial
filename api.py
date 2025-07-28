@@ -31,29 +31,24 @@ supabase_key = os.getenv("SUPABASE_KEY")
 supabase_table = os.getenv("SUPABASE_TABLE")
 photo_column = os.getenv("PHOTO_COLUMN")
 sync_column = os.getenv("SYNC_COLUMN")
+empresa_id = os.getenv("EMPRESA_ID")
 
 if not supabase_url or not supabase_key:
     raise ValueError("SUPABASE_URL e SUPABASE_KEY devem ser definidos nas variáveis de ambiente")
 
+if not empresa_id:
+    raise ValueError("EMPRESA_ID deve ser definido nas variáveis de ambiente")
 
-# Estrutura de cache otimizada
-# Estrutura de cache multi-tenant (por empresa)
-cache_por_empresa: Dict[str, Dict[str, List]] = {}
+
+# Estrutura de cache simplificada para empresa única
+cache_global: Dict[str, List] = {
+    'known_face_encodings': [],
+    'known_face_metadata': []
+}
 
 # Listas para monitoramento global
 pessoas_sem_foto: List[Dict] = []
 pessoas_sem_face_detectada: List[Dict] = []
-
-def get_cache_empresa(empresa_id: str) -> Dict[str, List]:
-    """
-    Retorna o cache para uma empresa específica, criando se não existir.
-    """
-    if empresa_id not in cache_por_empresa:
-        cache_por_empresa[empresa_id] = {
-            'known_face_encodings': [],
-            'known_face_metadata': []
-        }
-    return cache_por_empresa[empresa_id]
 
 def processar_imagem(image_array: np.ndarray) -> Optional[Tuple[List, List]]:
     """
@@ -89,12 +84,12 @@ def processar_imagem(image_array: np.ndarray) -> Optional[Tuple[List, List]]:
         logger.error(f"Erro ao processar imagem: {str(e)}")
         return None
 
-async def sincronizar_cache(empresa_id: str):
+async def sincronizar_cache():
     """
-    Sincroniza o cache para uma empresa específica, buscando usuários não sincronizados.
+    Sincroniza o cache da empresa configurada, buscando usuários não sincronizados.
     """
     try:
-        logger.info("Iniciando sincronização do cache...")
+        logger.info(f"Iniciando sincronização do cache para empresa {empresa_id}...")
         supabase = create_client(supabase_url, supabase_key)
 
         # Buscar registros não sincronizados
@@ -113,13 +108,12 @@ async def sincronizar_cache(empresa_id: str):
             id_pessoa = registro.get('id')
             fotos = registro.get(photo_column, [])
 
-            cache_empresa = get_cache_empresa(empresa_id)
-            # Remover dados antigos do cache da empresa
-            indices_to_remove = [i for i, meta in enumerate(cache_empresa['known_face_metadata']) if meta['id'] == id_pessoa]
+            # Remover dados antigos do cache global
+            indices_to_remove = [i for i, meta in enumerate(cache_global['known_face_metadata']) if meta['id'] == id_pessoa]
             if indices_to_remove:
                 for i in sorted(indices_to_remove, reverse=True):
-                    del cache_empresa['known_face_encodings'][i]
-                    del cache_empresa['known_face_metadata'][i]
+                    del cache_global['known_face_encodings'][i]
+                    del cache_global['known_face_metadata'][i]
                 logger.info(f"Registro antigo de {nome} (ID: {id_pessoa}) removido do cache para atualização.")
 
             if not fotos:
@@ -153,8 +147,8 @@ async def sincronizar_cache(empresa_id: str):
 
             if faces_detectadas:
                 for encoding in encodings_pessoa:
-                    cache_empresa['known_face_encodings'].append(np.array(encoding))
-                    cache_empresa['known_face_metadata'].append({'id': id_pessoa, 'nome': nome})
+                    cache_global['known_face_encodings'].append(np.array(encoding))
+                    cache_global['known_face_metadata'].append({'id': id_pessoa, 'nome': nome})
                 
                 logger.info(f"Sincronizando {nome} (ID: {id_pessoa}) com sucesso e atualizando status no DB.")
                 supabase.table(supabase_table).update({sync_column: True}).eq('id', id_pessoa).execute()
@@ -170,18 +164,19 @@ async def sincronizar_cache(empresa_id: str):
         logger.error(f"Erro ao sincronizar cache: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao sincronizar cache: {str(e)}")
 
-async def carregar_cache_completo(empresa_id: str):
+async def carregar_cache_completo():
     """
-    Força o recarregamento completo do cache para uma empresa específica.
+    Força o recarregamento completo do cache para a empresa configurada.
     """
     try:
         logger.info("Iniciando carregamento COMPLETO do cache...")
         supabase = create_client(supabase_url, supabase_key)
 
-        # Limpar cache da empresa específica
-        cache_empresa = get_cache_empresa(empresa_id)
-        cache_empresa['known_face_encodings'].clear()
-        cache_empresa['known_face_metadata'].clear()
+        logger.info(f"Forçando recarregamento completo do cache para a empresa {empresa_id}...")
+
+        # Limpar o cache global existente
+        cache_global['known_face_encodings'].clear()
+        cache_global['known_face_metadata'].clear()
         pessoas_sem_foto.clear()
         pessoas_sem_face_detectada.clear()
         gc.collect()
@@ -229,8 +224,8 @@ async def carregar_cache_completo(empresa_id: str):
 
             if faces_detectadas:
                 for encoding in encodings_pessoa:
-                    cache_empresa['known_face_encodings'].append(encoding)
-                    cache_empresa['known_face_metadata'].append({'id': id_pessoa, 'nome': nome})
+                    cache_global['known_face_encodings'].append(encoding)
+                    cache_global['known_face_metadata'].append({'id': id_pessoa, 'nome': nome})
                 ids_sincronizados.append(id_pessoa)
             else:
                 pessoas_sem_face_detectada.append({"id": id_pessoa, "nome": nome})
@@ -240,7 +235,7 @@ async def carregar_cache_completo(empresa_id: str):
             logger.info(f"Atualizando {len(ids_sincronizados)} registros para sync=true no Supabase.")
             supabase.table(supabase_table).update({sync_column: True}).in_('id', ids_sincronizados).execute()
 
-        logger.info(f"Carregamento completo para empresa {empresa_id} finalizado. {len(set(meta['id'] for meta in cache_empresa['known_face_metadata']))} pessoas no cache.")
+        logger.info(f"Carregamento completo para empresa {empresa_id} finalizado. {len(set(meta['id'] for meta in cache_global['known_face_metadata']))} pessoas no cache.")
 
     except Exception as e:
         logger.error(f"Erro no carregamento completo do cache: {str(e)}")
@@ -252,16 +247,12 @@ from contextlib import asynccontextmanager
 async def lifespan(app: FastAPI):
     """Contexto de vida da aplicação"""
     try:
-        logger.info("Iniciando aplicação e sincronizando cache para todas as empresas...")
-        supabase = create_client(supabase_url, supabase_key)
-        # Buscar todas as empresas distintas
-        response = supabase.table(supabase_table).select('empresa').execute()
-        if response.data:
-            empresas = list(set(item['empresa'] for item in response.data if item.get('empresa')))
-            logger.info(f"Empresas encontradas: {empresas}")
-            for empresa_id in empresas:
-                logger.info(f"Sincronizando cache para a empresa: {empresa_id}")
-                await carregar_cache_completo(empresa_id)
+        logger.info(f"Carregando cache inicial para a empresa {empresa_id}...")
+        try:
+            await carregar_cache_completo()
+            logger.info(f"Carga inicial do cache concluída para a empresa {empresa_id}.")
+        except Exception as e:
+            logger.error(f"Erro crítico ao carregar o cache inicial: {e}")
         logger.info("Sincronização inicial concluída. Aplicação pronta!")
         yield
     except Exception as e:
@@ -288,7 +279,7 @@ async def root():
     return {"message": "API de Reconhecimento Facial"}
 
 @app.get("/status")
-async def get_status(empresa_id: Optional[str] = None):
+async def get_status():
     """
     Endpoint de status detalhado para monitoramento do sistema de reconhecimento facial.
     
@@ -296,88 +287,42 @@ async def get_status(empresa_id: Optional[str] = None):
     """
     try:
         # Lógica de status global e por empresa
-        if empresa_id:
-            # Status para uma empresa específica
-            if empresa_id not in cache_por_empresa:
-                raise HTTPException(status_code=404, detail=f"Empresa com ID {empresa_id} não encontrada no cache.")
-            cache_empresa = get_cache_empresa(empresa_id)
-            faces_detectadas = len(set(meta['id'] for meta in cache_empresa['known_face_metadata']))
-            memoria_utilizada = sum(e.nbytes for e in cache_empresa['known_face_encodings']) / (1024*1024)
-            return {
-                "empresa_id": empresa_id,
-                "pessoas_com_face_detectada": faces_detectadas,
-                "memoria_utilizada_mb": round(memoria_utilizada, 4)
+        total_pessoas = len(cache_global['known_face_metadata'])
+        total_encodings = len(cache_global['known_face_encodings'])
+        memoria_utilizada = sum(e.nbytes for e in cache_global['known_face_encodings']) / (1024*1024)
+
+        return {
+            "status": "online",
+            "versao_api": "1.1.0",
+            "empresa_id": empresa_id,
+            "cache_global": {
+                "total_pessoas_registradas": total_pessoas,
+                "total_codificacoes_faciais": total_encodings,
+                "memoria_utilizada_mb": round(memoria_utilizada, 2)
+            },
+            "monitoramento_global": {
+                "pessoas_sem_foto_cadastrada": len(pessoas_sem_foto),
+                "pessoas_sem_face_detectada": len(pessoas_sem_face_detectada)
             }
-        else:
-            # Status global
-            total_pessoas_cacheadas = sum(len(set(meta['id'] for meta in v['known_face_metadata'])) for v in cache_por_empresa.values())
-            memoria_total = sum(e.nbytes for v in cache_por_empresa.values() for e in v['known_face_encodings']) / (1024*1024)
-            empresas_no_cache = list(cache_por_empresa.keys())
-            
-            return {
-                "status": "online",
-                "versao_api": "1.1.0",
-                "cache_global": {
-                    "empresas_cacheadas": len(empresas_no_cache),
-                    "total_pessoas_no_cache": total_pessoas_cacheadas,
-                    "memoria_total_utilizada_mb": round(memoria_total, 2),
-                    "lista_empresas": empresas_no_cache
-                },
-                "monitoramento_global": {
-                    "colaboradores_sem_foto": len(pessoas_sem_foto),
-                    "colaboradores_sem_face_detectada": len(pessoas_sem_face_detectada)
-                }
-            }
-        
+        }
 
     except Exception as e:
         logger.error(f"Erro ao obter status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
 
-@app.get("/monitoramento/sem-foto")
-async def listar_pessoas_sem_foto():
-    """Endpoint para listar pessoas sem foto cadastrada (visão global)."""
-    return {
-        "total": len(pessoas_sem_foto),
-        "pessoas": sorted(pessoas_sem_foto, key=lambda x: x["nome"])
-    }
-
-@app.get("/monitoramento/sem-face-detectada")
-async def listar_pessoas_sem_face():
-    """Endpoint para listar pessoas cujas faces não foram detectadas (visão global)."""
-    return {
-        "total": len(pessoas_sem_face_detectada),
-        "pessoas": sorted(pessoas_sem_face_detectada, key=lambda x: x["nome"])
-    }
-
-@app.get("/monitoramento/estatisticas")
-async def estatisticas_gerais():
-    """Endpoint para mostrar estatísticas gerais do sistema"""
-    faces_detectadas = len(set(meta['id'] for meta in known_face_metadata))
-    total_cadastrados = faces_detectadas + len(pessoas_sem_foto) + len(pessoas_sem_face_detectada)
-    taxa_sucesso = (faces_detectadas / total_cadastrados * 100) if total_cadastrados > 0 else 0
-    return {
-        "total_cadastrados": total_cadastrados,
-        "pessoas_com_face_detectada": faces_detectadas,
-        "sem_foto": len(pessoas_sem_foto),
-        "sem_face_detectada": len(pessoas_sem_face_detectada),
-        "taxa_sucesso_sincronizacao": f"{taxa_sucesso:.1f}%"
-    }
-
-@app.post("/reconhecer/{empresa_id}")
-async def reconhecer_frame(empresa_id: str, file: UploadFile = File(...)):
+@app.post("/reconhecer")
+async def reconhecer_frame(file: UploadFile = File(...)):
     """
     Endpoint para reconhecimento facial em tempo real com performance otimizada.
     """
     try:
         start_time = time.time()
 
-        cache_empresa = get_cache_empresa(empresa_id)
-        known_face_encodings_empresa = cache_empresa['known_face_encodings']
-        known_face_metadata_empresa = cache_empresa['known_face_metadata']
+        known_face_encodings = cache_global['known_face_encodings']
+        known_face_metadata = cache_global['known_face_metadata']
 
-        if not known_face_encodings_empresa:
-            raise HTTPException(status_code=404, detail=f"Nenhum rosto no cache para a empresa {empresa_id}. Sincronize ou verifique o ID.")
+        if not known_face_encodings:
+            raise HTTPException(status_code=404, detail=f"Nenhum rosto no cache para a empresa {empresa_id}. Sincronize o sistema.")
 
         contents = await file.read()
         nparr = np.frombuffer(contents, np.uint8)
@@ -405,8 +350,8 @@ async def reconhecer_frame(empresa_id: str, file: UploadFile = File(...)):
         else:
             main_face_encoding = unknown_face_encodings
 
-        # Comparar a face principal com o cache da empresa
-        distances = face_recognition.face_distance(known_face_encodings_empresa, main_face_encoding[0])
+        # Comparar a face principal com o cache global
+        distances = face_recognition.face_distance(known_face_encodings, main_face_encoding[0])
         
         final_results = {}
         if len(distances) > 0:
@@ -415,7 +360,7 @@ async def reconhecer_frame(empresa_id: str, file: UploadFile = File(...)):
 
             # Threshold de produção (0.39) - Equilíbrio entre precisão e flexibilidade
             if min_distance <= 0.41:
-                metadata = known_face_metadata_empresa[best_match_index]
+                metadata = known_face_metadata[best_match_index]
                 confianca = (1 - min_distance) * 100
                 
                 # Usar o ID como chave para garantir que o resultado seja único
@@ -435,12 +380,12 @@ async def reconhecer_frame(empresa_id: str, file: UploadFile = File(...)):
         logger.error(f"Erro no reconhecimento: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro no reconhecimento: {str(e)}")
 
-@app.post("/sincronizar/{empresa_id}")
-async def endpoint_sincronizar_empresa(empresa_id: str):
+@app.post("/sincronizar")
+async def endpoint_sincronizar_empresa():
     """Endpoint para forçar a sincronização de uma empresa específica."""
     try:
-        sincronizados = await sincronizar_cache(empresa_id)
-        return {"message": f"Sincronização para a empresa {empresa_id} concluída. {sincronizados} novos registros processados."}
+        sincronizados = await sincronizar_cache()
+        return {"message": f"{sincronizados} registros sincronizados."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -457,18 +402,18 @@ async def endpoint_sincronizar_todas():
         total_sincronizado = 0
         for empresa_id in empresas:
             logger.info(f"Iniciando sincronização para a empresa: {empresa_id}")
-            total_sincronizado += await sincronizar_cache(empresa_id)
+            total_sincronizado += await sincronizar_cache()
             
         return {"message": f"Sincronização de {len(empresas)} empresas concluída. {total_sincronizado} novos registros processados."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/redefinir-cache/{empresa_id}")
-async def endpoint_redefinir_cache_empresa(empresa_id: str):
+@app.post("/redefinir-cache")
+async def endpoint_redefinir_cache_empresa():
     """Endpoint para forçar uma redefinição completa do cache para uma empresa específica."""
     try:
-        await carregar_cache_completo(empresa_id)
-        return {"message": f"Cache para a empresa {empresa_id} foi completamente redefinido."}
+        await carregar_cache_completo()
+        return {"message": f"Cache foi completamente redefinido e recarregado."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -484,7 +429,7 @@ async def endpoint_redefinir_cache_todas():
         empresas = list(set(item['empresa'] for item in response.data if item.get('empresa')))
         for empresa_id in empresas:
             logger.info(f"Iniciando recarga completa para a empresa: {empresa_id}")
-            await carregar_cache_completo(empresa_id)
+            await carregar_cache_completo()
 
         return {"message": f"Cache de {len(empresas)} empresas foi completamente redefinido."}
     except Exception as e:
