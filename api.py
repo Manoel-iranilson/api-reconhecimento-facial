@@ -394,8 +394,15 @@ async def reconhecer_frame(file: UploadFile = File(...)):
                         "confianca": f"{confianca:.2f}%"
                     }
 
+        # Ordenar os resultados por confiança (do maior para o menor)
+        matches_ordenados = sorted(
+            list(final_results.values()),
+            key=lambda x: float(x['confianca'].rstrip('%')),
+            reverse=True
+        )
+        
         return {
-            "matches": list(final_results.values()),
+            "matches": matches_ordenados,
             "tempo_processamento": f"{(time.time() - start_time):.4f}s"
         }
 
