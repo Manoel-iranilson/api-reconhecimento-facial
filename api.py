@@ -53,6 +53,7 @@ pessoas_sem_face_detectada: List[Dict] = []
 def processar_imagem(image_array: np.ndarray) -> Optional[Tuple[List, List]]:
     """
     Processa uma imagem e retorna as codificações e localizações das faces encontradas.
+    Inclui pré-processamento para melhorar a qualidade da detecção.
 
     Args:
         image_array: Array numpy contendo a imagem a ser processada.
@@ -67,14 +68,31 @@ def processar_imagem(image_array: np.ndarray) -> Optional[Tuple[List, List]]:
         else:
             rgb_image = image_array
             
-        # Detectar faces na imagem usando o modelo HOG (mais rápido)
-        face_locations = face_recognition.face_locations(rgb_image, model="hog", number_of_times_to_upsample=1)
+        # Redimensionar a imagem se for muito grande (mantém a proporção)
+        height, width = rgb_image.shape[:2]
+        max_dimension = 800
+        if max(height, width) > max_dimension:
+            scale = max_dimension / max(height, width)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            rgb_image = cv2.resize(rgb_image, (new_width, new_height))
+            
+        # Melhorar contraste da imagem
+        lab = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
+        cl = clahe.apply(l)
+        limg = cv2.merge((cl,a,b))
+        rgb_image = cv2.cvtColor(limg, cv2.COLOR_LAB2RGB)
+            
+        # Detectar faces na imagem usando o modelo HOG com upsampling aumentado
+        face_locations = face_recognition.face_locations(rgb_image, model="hog", number_of_times_to_upsample=2)
         if not face_locations:
             logger.warning("Nenhuma face detectada na imagem")
             return None
         
-        # Gerar codificações para as faces detectadas em batch
-        face_encodings = face_recognition.face_encodings(rgb_image, face_locations, num_jitters=1)
+        # Gerar codificações para as faces detectadas com mais jitters para maior precisão
+        face_encodings = face_recognition.face_encodings(rgb_image, face_locations, num_jitters=2)
         if not face_encodings:
             logger.warning("Não foi possível gerar codificações para as faces detectadas")
             return None
@@ -358,18 +376,23 @@ async def reconhecer_frame(file: UploadFile = File(...)):
             best_match_index = np.argmin(distances)
             min_distance = distances[best_match_index]
 
-            # Threshold de produção (0.39) - Equilíbrio entre precisão e flexibilidade
-            if min_distance <= 0.41:
-                metadata = known_face_metadata[best_match_index]
-                confianca = (1 - min_distance) * 100
-                
-                # Usar o ID como chave para garantir que o resultado seja único
-                final_results[metadata['id']] = {
-                    "id": metadata['id'],
-                    "nome": metadata['nome'],
-                    "distancia": round(min_distance, 4),
-                    "confianca": f"{confianca:.2f}%"
-                }
+            # Considerar as 3 melhores correspondências com threshold mais tolerante
+            # Ordenar as distâncias e pegar os 3 melhores matches
+            top_indices = np.argsort(distances)[:3]
+            for idx in top_indices:
+                distance = distances[idx]
+                # Threshold mais tolerante (0.45) para melhor reconhecimento
+                if distance <= 0.45:
+                    metadata = known_face_metadata[idx]
+                    confianca = (1 - distance) * 100
+                    
+                    # Usar o ID como chave para garantir que o resultado seja único
+                    final_results[metadata['id']] = {
+                        "id": metadata['id'],
+                        "nome": metadata['nome'],
+                        "distancia": round(distance, 4),
+                        "confianca": f"{confianca:.2f}%"
+                    }
 
         return {
             "matches": list(final_results.values()),
